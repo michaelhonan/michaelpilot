@@ -8,6 +8,7 @@ import openpilot.cereal.messaging as messaging
 from openpilot.common.realtime import DT_DMON
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
+from openpilot.common.offline_dev import offline_dev_active
 from openpilot.common.stat_live import RunningStatFilter
 from openpilot.common.transformations.camera import DEVICE_CAMERAS
 
@@ -166,6 +167,7 @@ class DriverMonitoring:
     self.threshold_alert_2 = 0.
     self.dcam_uncertain_cnt = 0
     self.dcam_reset_cnt = 0
+    self.offline_dev = offline_dev_active()  # dev-offline branch only: disables DM enforcement
 
     self._reset_awareness()
     self._set_policy(MonitoringPolicy.vision)
@@ -421,6 +423,15 @@ class DriverMonitoring:
     dm.wheeltouchPolicyState.awarenessPercent = to_percent(self.last_wheeltouch_awareness if self.active_policy == MonitoringPolicy.vision else self.awareness)
     dm.wheeltouchPolicyState.awarenessStep = 0. if self.active_policy == MonitoringPolicy.vision else self.step_change
     dm.wheeltouchPolicyState.driverInteracting = self.driver_interacting
+
+    # dev-offline branch only: suppress the enforcement-driving fields so no DM alert,
+    # forceDecel or engage lockout occurs downstream. All other fields (awareness,
+    # distraction, pose) remain truthful so the real driver state is still logged.
+    if self.offline_dev:
+      dm.alertLevel = AlertLevel.none
+      dm.lockout = False
+      dm.alwaysOnLockout = False
+
     return dat
 
   def run_step(self, sm, demo=False):

@@ -12,6 +12,7 @@ from msgq.visionipc import VisionIpcClient
 
 
 from openpilot.common.params import Params
+from openpilot.common.offline_dev import offline_dev_active
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper, DT_CTRL
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.gps import get_gps_location_service
@@ -177,6 +178,9 @@ class SelfdriveD(CruiseHelper):
     self.events_sp = EventsSP()
     self.events_sp_prev = []
 
+    # dev-offline branch only: read once at process start (toggled offroad, picked up each drive)
+    self.offline_dev = offline_dev_active()
+
     self.mads = ModularAssistiveDrivingSystem(self)
     self.icbm = IntelligentCruiseButtonManagement(self.CP, self.CP_SP)
 
@@ -190,6 +194,10 @@ class SelfdriveD(CruiseHelper):
 
     self.events.clear()
     self.events_sp.clear()
+
+    # dev-offline branch only: persistent banner while DM enforcement is disabled / device offline
+    if self.offline_dev:
+      self.events_sp.add(custom.OnroadEventSP.EventName.offlineDevMode)
 
     if self.sm['controlsState'].lateralControlState.which() == 'debugState':
       self.events.add(EventName.joystickDebug)

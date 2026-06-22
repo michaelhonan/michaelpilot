@@ -2,6 +2,7 @@
 import datetime
 import os
 import signal
+import subprocess
 import sys
 import time
 import traceback
@@ -9,8 +10,10 @@ import traceback
 from openpilot.cereal import log
 import openpilot.cereal.messaging as messaging
 import openpilot.system.sentry as sentry
+from openpilot.common.basedir import BASEDIR
 from openpilot.common.utils import atomic_write
 from openpilot.common.params import Params, ParamKeyFlag
+from openpilot.common.offline_dev import offline_dev_active
 from openpilot.common.text_window import TextWindow
 from openpilot.common.hardware import HARDWARE, PC
 from openpilot.system.manager.helpers import unblock_stdout, save_bootlog
@@ -22,6 +25,18 @@ from openpilot.common.version import get_build_metadata
 from openpilot.common.hardware.hw import Paths
 
 from openpilot.sunnypilot.system.params_migration import run_migration
+
+
+def apply_offline_dev_firewall(active: bool) -> None:
+  """dev-offline branch only: apply (or tear down) the comma/sunnylink outbound block.
+  Fail-safe: never raise, so it can't block boot."""
+  script = os.path.join(BASEDIR, "sunnypilot", "offline_dev", "block_comma.sh")
+  if not os.path.exists(script):
+    return
+  try:
+    subprocess.run([script, "on" if active else "off"], check=False, timeout=30)
+  except Exception:
+    cloudlog.exception("offline-dev firewall apply failed")
 
 
 def manager_init() -> None:
@@ -52,6 +67,11 @@ def manager_init() -> None:
 
   if not PC:
     run_migration(params)
+
+  # dev-offline branch only: defense-in-depth firewall block of comma/sunnylink endpoints.
+  # The networking daemons are already not launched (process_config.py); this is belt-and-braces.
+  if not PC:
+    apply_offline_dev_firewall(offline_dev_active(params))
 
   # set unset params to their default value
   for k in params.all_keys():

@@ -230,6 +230,33 @@ class TestMonitoring(OpenpilotTestCase):
     assert alert_lvls[int((INVISIBLE_SECONDS_TO_ORANGE-1+DT_DMON*s._HI_STD_FALLBACK_TIME+0.1)/DT_DMON)] == 2
     assert alert_lvls[int((INVISIBLE_SECONDS_TO_RED-1+DT_DMON*s._HI_STD_FALLBACK_TIME+0.1)/DT_DMON)] == 3
 
+  # dev-offline branch only: enforcement-driving fields must be suppressed in the published
+  # packet, while the real driver state stays truthful in the same packet.
+  def test_offline_dev_suppresses_enforcement(self):
+    AlertLevel = log.DriverMonitoringState.AlertLevel
+    # engaged, fully distracted -> drives to red and sets the engage lockout
+    _, DM = self._run_seq(always_distracted, always_false, always_true, always_false)
+    DM.always_on = True  # so alwaysOnLockout would also be set
+
+    # baseline (offline-dev OFF): enforcement is real
+    DM.offline_dev = False
+    base = DM.get_state_packet().driverMonitoringState
+    assert base.alertLevel == AlertLevel.three
+    assert base.lockout
+    assert base.alwaysOnLockout
+    real_distracted = base.visionPolicyState.isDistracted
+    real_awareness = base.visionPolicyState.awarenessPercent
+
+    # offline-dev ON: enforcement fields suppressed...
+    DM.offline_dev = True
+    gated = DM.get_state_packet().driverMonitoringState
+    assert gated.alertLevel == AlertLevel.none
+    assert not gated.lockout
+    assert not gated.alwaysOnLockout
+    # ...but the real driver state is still reported honestly (no spoofing)
+    assert gated.visionPolicyState.isDistracted == real_distracted
+    assert gated.visionPolicyState.awarenessPercent == real_awareness
+
 
 def _build_sm(selfdrive_enabled, lat_active, steering_pressed, gas_pressed):
   cs = car.CarState.new_message()
