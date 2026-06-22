@@ -8,6 +8,7 @@ import datetime
 import os
 from pathlib import Path
 
+from openpilot.common.offline_dev import on_offline_dev_branch
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.layouts.settings.developer import DeveloperLayout
 from openpilot.common.hardware import PC
@@ -30,6 +31,7 @@ class DeveloperLayoutSP(DeveloperLayout):
     self.error_log_path = os.path.join(Paths.crash_log_root(), "error.log")
     self._is_release_branch: bool = self._is_release or ui_state.params.get_bool("IsReleaseSpBranch")
     self._is_development_branch: bool = ui_state.params.get_bool("IsTestedBranch") or ui_state.params.get_bool("IsDevelopmentBranch")
+    self._on_offline_dev_branch: bool = on_offline_dev_branch()
     self._initialize_items()
 
     for item in self.items:
@@ -52,7 +54,14 @@ class DeveloperLayoutSP(DeveloperLayout):
 
     self.error_log_btn = button_item(tr("Error Log"), tr("VIEW"), tr("View the error log for sunnypilot crashes."), callback=self._on_error_log_clicked)
 
-    self.items: list = [self.show_advanced_controls, self.enable_github_runner_toggle, self.enable_copyparty_toggle, self.prebuilt_toggle, self.error_log_btn,]
+    self.offline_dev_toggle = toggle_item_sp(tr("Offline Dev Mode (DM OFF + no uploads)"),
+                                             tr("FOR PRIVATE-PROPERTY DEVELOPMENT TESTING ONLY. Disables Driver Monitoring enforcement and takes " +
+                                                "the device fully offline (no comma/sunnylink connections or uploads). A persistent on-screen banner " +
+                                                "is shown while active. <b>Reboot required</b> for the offline change to take effect. " +
+                                                "Only available on the dev-offline branch."), param="OfflineDevMode")
+
+    self.items: list = [self.show_advanced_controls, self.enable_github_runner_toggle, self.enable_copyparty_toggle, self.prebuilt_toggle,
+                        self.offline_dev_toggle, self.error_log_btn,]
 
   @staticmethod
   def _on_prebuilt_toggled(state):
@@ -103,4 +112,5 @@ class DeveloperLayoutSP(DeveloperLayout):
 
     self.enable_copyparty_toggle.set_visible(show_advanced)
     self.enable_github_runner_toggle.set_visible(show_advanced and not self._is_release_branch)
+    self.offline_dev_toggle.set_visible(self._on_offline_dev_branch)
     self.error_log_btn.set_visible(not self._is_release_branch)

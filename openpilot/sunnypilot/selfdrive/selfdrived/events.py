@@ -256,4 +256,14 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
       AlertStatus.normal, AlertSize.small,
       Priority.LOW, VisualAlert.none, AudibleAlert.prompt, 2.),
   },
+
+  # dev-offline branch only: persistent, unmissable banner while DM enforcement is disabled
+  # and the device is offline. Intentionally loud and honest (no spoofing).
+  EventNameSP.offlineDevMode: {
+    ET.PERMANENT: Alert(
+      "OFFLINE DEV MODE",
+      "Driver Monitoring DISABLED — not for public roads",
+      AlertStatus.userPrompt, AlertSize.mid,
+      Priority.LOW, VisualAlert.none, AudibleAlert.none, .2),
+  },
 }
