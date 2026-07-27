@@ -429,6 +429,7 @@ class DriverMonitoring:
     # distraction, pose) remain truthful so the real driver state is still logged.
     if self.offline_dev:
       dm.alertLevel = AlertLevel.none
+      dm.noResponseForceDecel = False
       dm.lockout = False
       dm.alwaysOnLockout = False
 

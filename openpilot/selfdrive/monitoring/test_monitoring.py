@@ -242,6 +242,7 @@ class TestMonitoring(OpenpilotTestCase):
     DM.offline_dev = False
     base = DM.get_state_packet().driverMonitoringState
     assert base.alertLevel == AlertLevel.three
+    assert base.noResponseForceDecel
     assert base.lockout
     assert base.alwaysOnLockout
     real_distracted = base.visionPolicyState.isDistracted
@@ -251,6 +252,7 @@ class TestMonitoring(OpenpilotTestCase):
     DM.offline_dev = True
     gated = DM.get_state_packet().driverMonitoringState
     assert gated.alertLevel == AlertLevel.none
+    assert not gated.noResponseForceDecel
     assert not gated.lockout
     assert not gated.alwaysOnLockout
     # ...but the real driver state is still reported honestly (no spoofing)
