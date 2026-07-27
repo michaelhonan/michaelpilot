@@ -15,7 +15,7 @@ This is intentionally NOT a covert mechanism: driver state is still logged truth
 param is logged, and a persistent on-screen banner is shown while it is active.
 """
 from openpilot.common.params import Params
-from openpilot.system.version import get_build_metadata
+from openpilot.common.version import get_build_metadata
 
 OFFLINE_DEV_BRANCH = "dev-offline"
 
