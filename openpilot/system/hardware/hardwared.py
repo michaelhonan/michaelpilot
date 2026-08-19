@@ -15,6 +15,7 @@ from openpilot.cereal.services import SERVICE_LIST
 from openpilot.common.utils import strip_deprecated_keys
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
+from openpilot.common.offline_dev import update_connectivity_allows_startup
 from openpilot.common.realtime import DT_HW
 from openpilot.selfdrive.modeld.helpers import MODELS_DIR, usbgpu_compiled
 from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
@@ -333,7 +334,8 @@ def hardware_thread(end_event, hw_queue) -> None:
 
     # **** starting logic ****
 
-    startup_conditions["up_to_date"] = params.get("Offroad_ConnectivityNeeded") is None or params.get_bool("DisableUpdates") or params.get_bool("SnoozeUpdate")
+    # dev-offline is source-managed, so a stale/missing internet update check cannot block startup.
+    startup_conditions["up_to_date"] = update_connectivity_allows_startup(params)
     startup_conditions["no_excessive_actuation"] = params.get("Offroad_ExcessiveActuation") is None
     startup_conditions["not_uninstalling"] = not params.get_bool("DoUninstall")
     startup_conditions["accepted_terms"] = params.get("HasAcceptedTerms") == terms_version

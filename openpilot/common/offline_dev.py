@@ -13,6 +13,9 @@ is no runtime toggle that can leave a DM-disabled / offline state on a public-ro
 
 This is intentionally NOT a covert mechanism: driver state is still logged truthfully, the
 param is logged, and a persistent on-screen banner is shown while it is active.
+
+Software updates on the `dev-offline` branch are source-managed. This is independent of the
+OfflineDevMode param: an internet connectivity check must never prevent this branch starting.
 """
 from openpilot.common.params import Params
 from openpilot.common.version import get_build_metadata
@@ -31,3 +34,11 @@ def offline_dev_active(params: Params | None = None) -> bool:
   if not on_offline_dev_branch():
     return False
   return (params or Params()).get_bool("OfflineDevMode")
+
+
+def update_connectivity_allows_startup(params: Params | None = None) -> bool:
+  params = params or Params()
+  return (on_offline_dev_branch()
+          or params.get("Offroad_ConnectivityNeeded") is None
+          or params.get_bool("DisableUpdates")
+          or params.get_bool("SnoozeUpdate"))

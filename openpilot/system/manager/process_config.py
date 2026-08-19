@@ -4,7 +4,7 @@ import platform
 
 from opendbc.car.structs import car
 from openpilot.cereal import custom
-from openpilot.common.offline_dev import offline_dev_active
+from openpilot.common.offline_dev import offline_dev_active, on_offline_dev_branch
 from openpilot.common.params import Params
 from openpilot.common.hardware import PC, COMMA_HARDWARE
 from openpilot.system.manager.process import PythonProcess, NativeProcess, DaemonProcess
@@ -17,6 +17,7 @@ from openpilot.sunnypilot.sunnylink.utils import sunnylink_need_register, sunnyl
 
 WEBCAM = os.getenv("USE_WEBCAM") is not None
 OFFLINE_DEV = offline_dev_active()  # dev-offline branch only: take the device fully offline
+SOURCE_MANAGED_UPDATES = on_offline_dev_branch()
 
 def driverview(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started or params.get_bool("IsDriverViewEnabled")
@@ -209,12 +210,16 @@ if os.path.exists("../../third_party/copyparty/copyparty-sfx.py"):
   copyparty_args += ["-q"]
   procs += [NativeProcess("copyparty-sfx", "openpilot/third_party/copyparty", ["./copyparty-sfx.py", *copyparty_args], and_(only_offroad, use_copyparty))]
 
-# dev-offline branch only: do not launch anything that talks to comma/sunnylink servers.
+# dev-offline is source-managed, so it never runs the internet updater.
+if SOURCE_MANAGED_UPDATES:
+  procs = [p for p in procs if p.name != "updated"]
+
+# With OfflineDevMode active, do not launch anything that talks to comma/sunnylink servers.
 # Local logging (loggerd/deleter) and local stats (statsd) stay on; they just never upload.
 if OFFLINE_DEV:
   NETWORK_PROCS = {"manage_athenad", "uploader", "manage_sunnylinkd",
                    "sunnylink_registration_manager", "statsd_sp",
-                   "sunnylink_uploader", "updated"}
+                   "sunnylink_uploader"}
   procs = [p for p in procs if p.name not in NETWORK_PROCS]
 
 managed_processes = {p.name: p for p in procs}
