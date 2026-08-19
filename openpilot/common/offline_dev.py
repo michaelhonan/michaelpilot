@@ -17,10 +17,20 @@ param is logged, and a persistent on-screen banner is shown while it is active.
 Software updates on the `dev-offline` branch are source-managed. This is independent of the
 OfflineDevMode param: an internet connectivity check must never prevent this branch starting.
 """
+from typing import Protocol
+
 from openpilot.common.params import Params
 from openpilot.common.version import get_build_metadata
 
 OFFLINE_DEV_BRANCH = "dev-offline"
+
+
+class BoolParamsLike(Protocol):
+  def get_bool(self, key: str) -> bool: ...
+
+
+class UpdateParamsLike(BoolParamsLike, Protocol):
+  def get(self, key: str) -> object | None: ...
 
 
 def on_offline_dev_branch() -> bool:
@@ -30,13 +40,13 @@ def on_offline_dev_branch() -> bool:
     return False
 
 
-def offline_dev_active(params: Params | None = None) -> bool:
+def offline_dev_active(params: BoolParamsLike | None = None) -> bool:
   if not on_offline_dev_branch():
     return False
   return (params or Params()).get_bool("OfflineDevMode")
 
 
-def update_connectivity_allows_startup(params: Params | None = None) -> bool:
+def update_connectivity_allows_startup(params: UpdateParamsLike | None = None) -> bool:
   params = params or Params()
   return (on_offline_dev_branch()
           or params.get("Offroad_ConnectivityNeeded") is None

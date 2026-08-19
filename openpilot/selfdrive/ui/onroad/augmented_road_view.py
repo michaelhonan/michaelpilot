@@ -18,6 +18,7 @@ if gui_app.sunnypilot_ui():
   from openpilot.selfdrive.ui.sunnypilot.onroad.augmented_road_view import BORDER_COLORS_SP, AugmentedRoadViewSP
   from openpilot.selfdrive.ui.sunnypilot.onroad.driver_state import DriverStateRendererSP as DriverStateRenderer
   from openpilot.selfdrive.ui.sunnypilot.onroad.hud_renderer import HudRendererSP as HudRenderer
+  from openpilot.selfdrive.ui.sunnypilot.onroad.modern_view import MODERN_FRAME_THICKNESS, AdaptiveContrast
   from openpilot.selfdrive.ui.sunnypilot.ui_state import OnroadTimerStatus
 
 OpState = log.SelfdriveState.OpenpilotState
@@ -56,6 +57,9 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     self._hud_renderer = HudRenderer()
     self.alert_renderer = AlertRenderer()
     self.driver_state_renderer = DriverStateRenderer()
+    if gui_app.sunnypilot_ui():
+      self._modern_contrast_filter = AdaptiveContrast(gui_app.target_fps)
+      self._modern_contrast = self._modern_contrast_filter.update(-1)
 
   def _render(self, rect):
     # Only render when system is started to avoid invalid data access
@@ -66,13 +70,19 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
 
     # Update calibration before rendering
     self._update_calibration()
+    modern = gui_app.sunnypilot_ui() and ui_state.modern_driving_view
+    if modern:
+      self._modern_contrast = self._modern_contrast_filter.update(ui_state.light_sensor)
+      self.model_renderer.set_modern_contrast(self._modern_contrast)
+      self._hud_renderer.set_modern_contrast(self._modern_contrast)
 
     # Create inner content area with border padding
+    border_size = MODERN_FRAME_THICKNESS if modern else UI_BORDER_SIZE
     self._content_rect = rl.Rectangle(
-      rect.x + UI_BORDER_SIZE,
-      rect.y + UI_BORDER_SIZE,
-      rect.width - 2 * UI_BORDER_SIZE,
-      rect.height - 2 * UI_BORDER_SIZE,
+      rect.x + border_size,
+      rect.y + border_size,
+      rect.width - 2 * border_size,
+      rect.height - 2 * border_size,
     )
 
     # Enable scissor mode to clip all rendering within content rectangle boundaries
@@ -92,7 +102,8 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     AugmentedRoadViewSP.update_fade_out_bottom_overlay(self, self._content_rect)
     self._hud_renderer.render(self._content_rect)
     self.alert_renderer.render(self._content_rect)
-    self.driver_state_renderer.render(self._content_rect)
+    if not (gui_app.sunnypilot_ui() and ui_state.modern_driving_view):
+      self.driver_state_renderer.render(self._content_rect)
 
     # Custom UI extension point - add custom overlays here
     # Use self._content_rect for positioning within camera bounds
@@ -112,12 +123,19 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     pass
 
   def _draw_border(self, rect: rl.Rectangle):
-    rl.draw_rectangle_lines_ex(rect, UI_BORDER_SIZE, rl.BLACK)
+    modern = gui_app.sunnypilot_ui() and ui_state.modern_driving_view
+    border_size = MODERN_FRAME_THICKNESS if modern else UI_BORDER_SIZE
+    rl.draw_rectangle_lines_ex(rect, border_size, rl.BLACK)
     border_roundness = 0.12
     border_color = BORDER_COLORS.get(ui_state.status, BORDER_COLORS[UIStatus.DISENGAGED])
-    border_rect = rl.Rectangle(rect.x + UI_BORDER_SIZE, rect.y + UI_BORDER_SIZE,
-                               rect.width - 2 * UI_BORDER_SIZE, rect.height - 2 * UI_BORDER_SIZE)
-    rl.draw_rectangle_rounded_lines_ex(border_rect, border_roundness, 10, UI_BORDER_SIZE, border_color)
+    if modern:
+      if ui_state.status in (UIStatus.ENGAGED, UIStatus.OVERRIDE):
+        border_color = self._modern_contrast.control_blue
+      elif ui_state.status == UIStatus.LAT_ONLY:
+        border_color = self._modern_contrast.lateral_only_blue
+    border_rect = rl.Rectangle(rect.x + border_size, rect.y + border_size,
+                               rect.width - 2 * border_size, rect.height - 2 * border_size)
+    rl.draw_rectangle_rounded_lines_ex(border_rect, border_roundness, 10, border_size, border_color)
 
   def _switch_stream_if_needed(self, sm):
     if sm['selfdriveState'].experimentalMode and WIDE_CAM in self.available_streams:

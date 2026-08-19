@@ -28,6 +28,11 @@ class VisualsLayout(Widget):
 
   def _initialize_items(self):
     self._toggle_defs = {
+      "ModernDrivingView": (
+        lambda: tr("Modern Driving View"),
+        tr("Use the mirror-safe bottom driving layout, blue control language, and engagement transitions."),
+        None,
+      ),
       "BlindSpot": (
         lambda: tr("Show Blind Spot Warnings"),
         tr("Enabling this will display warnings when a vehicle is detected in your " +

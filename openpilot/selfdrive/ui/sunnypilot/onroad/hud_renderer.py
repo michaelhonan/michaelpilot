@@ -16,9 +16,14 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.smart_cruise_control import SmartC
 from openpilot.selfdrive.ui.sunnypilot.onroad.turn_signal import TurnSignalController
 from openpilot.selfdrive.ui.sunnypilot.onroad.circular_alerts import CircularAlertsRenderer
 from openpilot.selfdrive.ui.sunnypilot.onroad.speed_renderer import SpeedRenderer
+from openpilot.selfdrive.ui.sunnypilot.onroad.modern_road import instrument_blue_active
+from openpilot.selfdrive.ui.sunnypilot.onroad.modern_view import (
+  DEFAULT_MODERN_CONTRAST, MODERN_SURFACES, MODERN_TYPOGRAPHY, ModernContrast, build_modern_layout,
+  format_speed_panel_values,
+)
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer, UI_CONFIG, FONT_SIZES, COLORS, CRUISE_DISABLED_CHAR
-from openpilot.system.ui.lib.application import gui_app
+from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 
@@ -37,12 +42,17 @@ class HudRendererSP(HudRenderer):
     self.circular_alerts_renderer = CircularAlertsRenderer()
     self.speed_renderer = SpeedRenderer()
     self._torque_bar = TorqueBar(scale=3.0, always=True)
+    self._modern_contrast = DEFAULT_MODERN_CONTRAST
+    self._font_audiowide = gui_app.font(FontWeight.AUDIOWIDE)
 
     self.pcm_cruise_speed: bool = True
     self.show_icbm_status: bool = False
     self.icbm_active_counter: int = 0
     self.speed_cluster: float = 0.0
     self.speed_conv: float = CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
+
+  def set_modern_contrast(self, contrast: ModernContrast) -> None:
+    self._modern_contrast = contrast
 
   def _update_state(self) -> None:
     if ui_state.sm.recv_frame["carState"] < ui_state.started_frame:
@@ -128,7 +138,79 @@ class HudRendererSP(HudRenderer):
   def _draw_current_speed(self, rect: rl.Rectangle) -> None:
     self.speed_renderer.render(rect)
 
+  def _draw_speed_panel_modern(self, rect: rl.Rectangle) -> None:
+    long_override = ui_state.sm['carControl'].cruiseControl.override
+    control_active = instrument_blue_active(ui_state.status.value, long_override)
+    border = self._modern_contrast.control_blue if control_active else COLORS.BORDER_TRANSLUCENT
+
+    rl.draw_rectangle_rounded(rect, MODERN_SURFACES.panel_roundness, 10,
+                              rl.Color(0, 0, 0, MODERN_SURFACES.panel_alpha))
+    rl.draw_rectangle_rounded_lines_ex(rect, MODERN_SURFACES.panel_roundness, 10,
+                                       MODERN_SURFACES.panel_border_width, border)
+
+    label_color = self._modern_contrast.control_blue if control_active else COLORS.GREY
+    set_label_color = label_color if self.is_cruise_set else rl.Color(label_color.r, label_color.g, label_color.b, 90)
+    set_value_color = COLORS.WHITE if self.is_cruise_set else rl.Color(255, 255, 255, 90)
+    value_shadow = rl.Color(0, 0, 0, self._modern_contrast.text_shadow_alpha)
+
+    set_center_x = rect.x + rect.width * 0.25
+    speed_center_x = rect.x + rect.width * 0.75
+    label_y = rect.y + 24
+    value_y = rect.y + 70
+
+    self._draw_modern_text_centered(tr("SET"), set_center_x, label_y,
+                                    self._font_audiowide, MODERN_TYPOGRAPHY.panel_label, set_label_color)
+    self._draw_modern_text_centered(tr("SPEED"), speed_center_x, label_y,
+                                    self._font_audiowide, MODERN_TYPOGRAPHY.panel_label, label_color)
+
+    set_speed_text, speed_text, unit_text = format_speed_panel_values(
+      self.is_cruise_set, self.set_speed, self.speed_renderer.speed, ui_state.is_metric,
+    )
+    self._draw_modern_text_centered(set_speed_text, set_center_x + 3, value_y + 3,
+                                    self._font_audiowide, MODERN_TYPOGRAPHY.panel_value, value_shadow)
+    self._draw_modern_text_centered(set_speed_text, set_center_x, value_y,
+                                    self._font_audiowide, MODERN_TYPOGRAPHY.panel_value, set_value_color)
+    self._draw_modern_text_centered(speed_text, speed_center_x + 3, value_y + 3,
+                                    self._font_audiowide, MODERN_TYPOGRAPHY.panel_value, value_shadow)
+    self._draw_modern_text_centered(speed_text, speed_center_x, value_y,
+                                    self._font_audiowide, MODERN_TYPOGRAPHY.panel_value, COLORS.WHITE)
+
+    unit_text = tr(unit_text)
+    self._draw_modern_text_centered(unit_text, speed_center_x, rect.y + rect.height - 45,
+                                    self._font_medium, MODERN_TYPOGRAPHY.panel_unit,
+                                    COLORS.WHITE_TRANSLUCENT)
+
+  @staticmethod
+  def _draw_modern_text_centered(text: str, center_x: float, y: float, font: rl.Font,
+                                 font_size: int, color: rl.Color) -> None:
+    text_size = measure_text_cached(font, text, font_size)
+    rl.draw_text_ex(font, text, rl.Vector2(center_x - text_size.x / 2, y), font_size, 0, color)
+
+  def _render_modern(self, rect: rl.Rectangle) -> None:
+    layout = build_modern_layout(rect, ui_state.developer_ui)
+
+    self._draw_speed_panel_modern(layout.speed_panel)
+
+    self._exp_button.modern_style = True
+    self._exp_button.modern_color = self._modern_contrast.control_blue
+    self._exp_button.render(layout.experimental_control)
+
+    if ui_state.torque_bar:
+      self._torque_bar.render(rl.Rectangle(rect.x, rect.y, rect.width, rect.height - get_bottom_dev_ui_offset()))
+
+    self.developer_ui.render(rect)
+    self.road_name_renderer.render_modern(layout.road_name)
+    self.smart_cruise_control_renderer.render_modern(layout.smart_cruise, self._modern_contrast.control_blue)
+    self.turn_signal_controller.render_modern(layout.left_signal, layout.right_signal)
+    self.circular_alerts_renderer.render_modern(layout.circular_alert)
+    self.rocket_fuel.render_modern(layout.acceleration_bar, ui_state.sm)
+
   def _render(self, rect: rl.Rectangle) -> None:
+    if ui_state.modern_driving_view:
+      self._render_modern(rect)
+      return
+
+    self._exp_button.modern_style = False
     super()._render(rect)
 
     if ui_state.torque_bar:

@@ -10,6 +10,7 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
+from openpilot.selfdrive.ui.sunnypilot.onroad.modern_view import MODERN_SURFACES, MODERN_TYPOGRAPHY
 
 
 class RoadNameRenderer(Widget):
@@ -54,3 +55,23 @@ class RoadNameRenderer(Widget):
     sz = measure_text_cached(self.font_demi, text, 46)
     origin = rl.Vector2(road_rect.x + road_rect.width / 2 - sz.x / 2, road_rect.y + road_rect.height / 2 - sz.y / 2)
     rl.draw_text_ex(self.font_demi, text, origin, 46, 0, rl.Color(255, 255, 255, 200))
+
+  def render_modern(self, rect: rl.Rectangle) -> None:
+    if not self.road_name or not ui_state.road_name_toggle:
+      return
+
+    text = self.road_name
+    font_size = MODERN_TYPOGRAPHY.road_name
+    max_text_width = rect.width - 48
+    text_size = measure_text_cached(self.font_demi, text, font_size)
+    if text_size.x > max_text_width:
+      while text_size.x > max_text_width and len(text) > 3:
+        text = text[:-1]
+        text_size = measure_text_cached(self.font_demi, text + "...", font_size)
+      text += "..."
+
+    text_size = measure_text_cached(self.font_demi, text, font_size)
+    rl.draw_rectangle_rounded(rect, 0.2, 10, rl.Color(0, 0, 0, MODERN_SURFACES.utility_alpha))
+    origin = rl.Vector2(rect.x + (rect.width - text_size.x) / 2,
+                        rect.y + (rect.height - text_size.y) / 2)
+    rl.draw_text_ex(self.font_demi, text, origin, font_size, 0, rl.Color(255, 255, 255, 215))

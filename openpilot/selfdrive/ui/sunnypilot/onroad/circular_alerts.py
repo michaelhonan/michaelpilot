@@ -138,3 +138,39 @@ class CircularAlertsRenderer:
         line_x = center.x - measure.x / 2
         rl.draw_text_ex(font, line, rl.Vector2(line_x, current_y), text_size, spacing, txt_color)
         current_y += text_size * FONT_SCALE
+
+  def render_modern(self, rect: rl.Rectangle) -> None:
+    if not self._allow_e2e_alerts or (self._e2e_alert_display_timer <= 0 and
+                                     not (ui_state.standstill_timer and self._is_standstill)):
+      return
+
+    center = rl.Vector2(rect.x + rect.width / 2, rect.y + rect.height / 2)
+    radius = min(rect.width, rect.height) / 2
+    is_pulsing = (self._e2e_alert_frame % gui_app.target_fps) < (gui_app.target_fps / 2.5)
+    is_standstill = self._e2e_alert_display_timer == 0 and ui_state.standstill_timer and self._is_standstill
+    frame_color = rl.Color(255, 255, 255, 75) if is_standstill or is_pulsing else rl.Color(0, 255, 0, 75)
+    rl.draw_circle_v(center, radius, rl.Color(0, 0, 0, 175))
+    rl.draw_ring(center, radius - 6, radius, 0, 360, 48, frame_color)
+
+    font = gui_app.font(FontWeight.BOLD)
+    if is_standstill:
+      label = "STOPPED"
+      label_size = measure_text_cached(font, label, 42)
+      timer_size = measure_text_cached(font, self._alert_text, 58)
+      rl.draw_text_ex(font, label, rl.Vector2(center.x - label_size.x / 2, center.y - 55), 42, 0,
+                      rl.Color(255, 175, 3, 240))
+      rl.draw_text_ex(font, self._alert_text, rl.Vector2(center.x - timer_size.x / 2, center.y + 4), 58, 0, rl.WHITE)
+      return
+
+    if self._alert_img:
+      scale = min(0.48, rect.width * 0.46 / max(self._alert_img.width, 1))
+      pos = rl.Vector2(center.x - self._alert_img.width * scale / 2, rect.y + 20)
+      rl.draw_texture_ex(self._alert_img, pos, 0.0, scale, rl.WHITE)
+
+    text_color = rl.WHITE if is_pulsing else rl.Color(0, 255, 0, 220)
+    lines = self._alert_text.split('\n')
+    line_y = rect.y + rect.height - 73 - (len(lines) - 1) * 32
+    for line in lines:
+      size = measure_text_cached(font, line, 30)
+      rl.draw_text_ex(font, line, rl.Vector2(center.x - size.x / 2, line_y), 30, 0, text_color)
+      line_y += 34

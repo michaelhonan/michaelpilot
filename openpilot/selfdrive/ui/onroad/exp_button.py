@@ -23,6 +23,8 @@ class ExpButton(Widget):
     self._txt_wheel: rl.Texture = gui_app.texture('icons/chffr_wheel.png', icon_size, icon_size)
     self._txt_exp: rl.Texture = gui_app.texture('icons/experimental.png', icon_size, icon_size)
     self._rect = rl.Rectangle(0, 0, button_size, button_size)
+    self.modern_style: bool = False
+    self.modern_color: rl.Color = rl.Color(0x3E, 0x6A, 0xE1, 0xFF)
 
   def set_rect(self, rect: rl.Rectangle) -> None:
     self._rect.x, self._rect.y = rect.x, rect.y
@@ -48,9 +50,20 @@ class ExpButton(Widget):
 
     self._white_color.a = 180 if self.is_pressed or not self._engageable else 255
 
-    texture = self._txt_exp if self._held_or_actual_mode() else self._txt_wheel
-    rl.draw_circle(center_x, center_y, self._rect.width / 2, self._black_bg)
-    rl.draw_texture_ex(texture, rl.Vector2(center_x - texture.width / 2, center_y - texture.height / 2), 0.0, 1.0, self._white_color)
+    active = self._held_or_actual_mode()
+    texture = self._txt_exp if active else self._txt_wheel
+    if self.modern_style:
+      visual_size = self._rect.width * 0.75
+      radius = visual_size / 2
+      rl.draw_circle(center_x, center_y, radius, rl.Color(0, 0, 0, 125))
+      if active:
+        rl.draw_ring(rl.Vector2(center_x, center_y), radius - 6, radius, 0, 360, 48, self.modern_color)
+      texture_scale = min(1.0, visual_size * 0.72 / max(texture.width, 1))
+      texture_pos = rl.Vector2(center_x - texture.width * texture_scale / 2, center_y - texture.height * texture_scale / 2)
+      rl.draw_texture_ex(texture, texture_pos, 0.0, texture_scale, self._white_color)
+    else:
+      rl.draw_circle(center_x, center_y, self._rect.width / 2, self._black_bg)
+      rl.draw_texture_ex(texture, rl.Vector2(center_x - texture.width / 2, center_y - texture.height / 2), 0.0, 1.0, self._white_color)
 
   def _held_or_actual_mode(self):
     now = time.monotonic()

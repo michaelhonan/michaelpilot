@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -30,6 +30,10 @@ AlertSize = log.SelfdriveState.AlertSize
 AlertStatus = log.SelfdriveState.AlertStatus
 
 BRANCH_NAME = "this-is-a-really-super-mega-ultra-max-extreme-ultimate-long-branch-name"
+
+
+class MessagePublisher(Protocol):
+  def send(self, service: str, message: Any, /) -> None: ...
 
 
 @dataclass
@@ -166,9 +170,20 @@ def setup_developer_params() -> None:
   Params().put("CarParamsPersistent", CP.to_bytes(), block=True)
 
 
+def setup_big_onroad_preferences(*, hide_v_ego_ui: bool = False, is_metric: bool = False) -> None:
+  """Apply deterministic modern-HUD preferences immediately and through the params refresh worker."""
+  from openpilot.selfdrive.ui.ui_state import ui_state
+
+  params = Params()
+  params.put_bool("HideVEgoUI", hide_v_ego_ui, block=True)
+  params.put_bool("IsMetric", is_metric, block=True)
+  ui_state.hide_v_ego_ui = hide_v_ego_ui
+  ui_state.is_metric = is_metric
+
+
 # --- Send functions ---
 
-def send_onroad(pm: PubMaster) -> None:
+def send_onroad(pm: MessagePublisher) -> None:
   ds = messaging.new_message('deviceState')
   ds.deviceState.started = True
   ds.deviceState.networkType = log.DeviceState.NetworkType.wifi
@@ -181,7 +196,146 @@ def send_onroad(pm: PubMaster) -> None:
   pm.send('pandaStates', ps)
 
 
-def make_network_state_setup(pm: PubMaster, network_type) -> Callable:
+def send_big_onroad_scene(pm: MessagePublisher, *, control_mode: str = "full",
+                          lane_change_state=log.LaneChangeState.off,
+                          lane_change_direction=log.LaneChangeDirection.none,
+                          lane_change_probability: float | None = None,
+                          is_rhd: bool = True,
+                          openpilot_longitudinal_control: bool = True,
+                          set_speed: float = 100.0, cruise_available: bool = True,
+                          road_name: str = "Princes Highway",
+                          alert_size=AlertSize.none, alert_text1: str = "",
+                          alert_text2: str = "", alert_status=AlertStatus.normal) -> None:
+  send_onroad(pm)
+
+  lateral_enabled = control_mode in ("full", "lateral")
+  longitudinal_enabled = control_mode in ("full", "longitudinal")
+  overriding = control_mode == "override"
+
+  ss = messaging.new_message('selfdriveState')
+  ss.selfdriveState.state = log.SelfdriveState.OpenpilotState.overriding if overriding else (
+    log.SelfdriveState.OpenpilotState.enabled if longitudinal_enabled else log.SelfdriveState.OpenpilotState.disabled
+  )
+  ss.selfdriveState.enabled = longitudinal_enabled or overriding
+  ss.selfdriveState.active = lateral_enabled or longitudinal_enabled or overriding
+  ss.selfdriveState.engageable = True
+  ss.selfdriveState.alertSize = alert_size
+  ss.selfdriveState.alertText1 = alert_text1
+  ss.selfdriveState.alertText2 = alert_text2
+  ss.selfdriveState.alertStatus = alert_status
+
+  ss_sp = messaging.new_message('selfdriveStateSP')
+  ss_sp.selfdriveStateSP.mads.available = True
+  ss_sp.selfdriveStateSP.mads.enabled = lateral_enabled or overriding
+  ss_sp.selfdriveStateSP.mads.active = lateral_enabled or overriding
+  ss_sp.selfdriveStateSP.mads.state = (
+    "overriding" if overriding else ("enabled" if lateral_enabled else "disabled")
+  )
+
+  car_state = messaging.new_message('carState')
+  car_state.carState.vEgo = 22.2
+  car_state.carState.vEgoCluster = 22.2
+  car_state.carState.vCruiseCluster = set_speed
+  car_state.carState.cruiseState.available = cruise_available
+  car_state.carState.cruiseState.enabled = longitudinal_enabled
+  car_state.carState.cruiseState.speedCluster = max(0.0, set_speed) / 3.6
+  car_state.carState.leftBlinker = lane_change_direction == log.LaneChangeDirection.left
+  car_state.carState.rightBlinker = lane_change_direction == log.LaneChangeDirection.right
+
+  controls_state = messaging.new_message('controlsState')
+  controls_state.controlsState.deprecated.vCruise = set_speed
+
+  car_control = messaging.new_message('carControl')
+  car_control.carControl.enabled = lateral_enabled or longitudinal_enabled
+  car_control.carControl.latActive = lateral_enabled
+  car_control.carControl.longActive = longitudinal_enabled
+  car_control.carControl.cruiseControl.override = overriding
+
+  car_params = messaging.new_message('carParams')
+  car_params.carParams.openpilotLongitudinalControl = openpilot_longitudinal_control
+
+  longitudinal_plan = messaging.new_message('longitudinalPlan')
+  longitudinal_plan.longitudinalPlan.allowThrottle = True
+  longitudinal_plan.longitudinalPlan.allowBrake = True
+
+  longitudinal_plan_sp = messaging.new_message('longitudinalPlanSP')
+  resolver = longitudinal_plan_sp.longitudinalPlanSP.speedLimit.resolver
+  resolver.speedLimit = 80.0 / 3.6
+  resolver.speedLimitLast = 80.0 / 3.6
+  resolver.speedLimitFinal = 80.0 / 3.6
+  resolver.speedLimitFinalLast = 80.0 / 3.6
+  resolver.speedLimitValid = True
+  resolver.speedLimitLastValid = True
+  resolver.source = "map"
+  longitudinal_plan_sp.longitudinalPlanSP.smartCruiseControl.vision.enabled = True
+  longitudinal_plan_sp.longitudinalPlanSP.smartCruiseControl.vision.active = longitudinal_enabled
+
+  x_values = [float(index * 3.5) for index in range(33)]
+  zero_values = [0.0] * len(x_values)
+  model = messaging.new_message('modelV2')
+  model.valid = True
+  model.modelV2.position.x = x_values
+  model.modelV2.position.y = zero_values
+  model.modelV2.position.z = zero_values
+  model.modelV2.acceleration.x = [0.15] * len(x_values)
+  lane_lines = model.modelV2.init('laneLines', 4)
+  for lane_line, y_offset in zip(lane_lines, (5.4, 1.8, -1.8, -5.4), strict=True):
+    lane_line.x = x_values
+    lane_line.y = [y_offset] * len(x_values)
+    lane_line.z = zero_values
+  model.modelV2.laneLineProbs = [0.9, 0.95, 0.95, 0.9]
+  road_edges = model.modelV2.init('roadEdges', 2)
+  for road_edge, y_offset in zip(road_edges, (7.2, -7.2), strict=True):
+    road_edge.x = x_values
+    road_edge.y = [y_offset] * len(x_values)
+    road_edge.z = zero_values
+  model.modelV2.roadEdgeStds = [0.15, 0.15]
+  model.modelV2.meta.laneChangeState = lane_change_state
+  model.modelV2.meta.laneChangeDirection = lane_change_direction
+  desire_state = [0.0] * 7
+  if lane_change_probability is not None:
+    desire_index = 4 if lane_change_direction == log.LaneChangeDirection.right else 3
+    desire_state[desire_index] = lane_change_probability
+  model.modelV2.meta.desireState = desire_state
+
+  radar = messaging.new_message('radarState')
+  radar.radarState.leadOne.present = True
+  radar.radarState.leadOne.dRel = 45.0
+  radar.radarState.leadOne.yRel = 0.0
+  radar.radarState.leadOne.vRel = -1.0
+
+  calibration = messaging.new_message('extrinsicsCalibration')
+  calibration.valid = True
+  calibration.extrinsicsCalibration.calStatus = log.ExtrinsicsCalibration.Status.calibrated
+  calibration.extrinsicsCalibration.rpyCalib = [0.0, math.radians(2.5), 0.0]
+  calibration.extrinsicsCalibration.height = [1.22]
+
+  driver_state = messaging.new_message('driverStateV2')
+  driver_state.driverStateV2.leftDriverData.faceOrientation = [0.0, 0.05, 0.0]
+  driver_state.driverStateV2.rightDriverData.faceOrientation = [0.0, -0.05, 0.0]
+  driver_monitoring = messaging.new_message('driverMonitoringState')
+  driver_monitoring.driverMonitoringState.activePolicy = log.DriverMonitoringState.MonitoringPolicy.vision
+  driver_monitoring.driverMonitoringState.isRHD = is_rhd
+
+  camera_state = messaging.new_message('wideRoadCameraState')
+  camera_state.valid = True
+  camera_state.wideRoadCameraState.exposureValPercent = 35.0
+
+  live_map = messaging.new_message('liveMapDataSP')
+  live_map.liveMapDataSP.roadName = road_name
+
+  for service, message in (
+    ('selfdriveState', ss), ('selfdriveStateSP', ss_sp), ('carState', car_state),
+    ('controlsState', controls_state), ('carControl', car_control), ('carParams', car_params),
+    ('longitudinalPlan', longitudinal_plan), ('longitudinalPlanSP', longitudinal_plan_sp),
+    ('modelV2', model), ('radarState', radar), ('extrinsicsCalibration', calibration),
+    ('driverStateV2', driver_state), ('driverMonitoringState', driver_monitoring),
+    ('wideRoadCameraState', camera_state), ('liveMapDataSP', live_map),
+  ):
+    pm.send(service, message)
+
+
+def make_network_state_setup(pm: MessagePublisher, network_type) -> Callable:
   def _send() -> None:
     ds = messaging.new_message('deviceState')
     ds.deviceState.networkType = network_type
@@ -189,31 +343,38 @@ def make_network_state_setup(pm: PubMaster, network_type) -> Callable:
   return _send
 
 
-def make_alert_setup(pm: PubMaster, size, text1, text2, status) -> Callable:
+def make_alert_setup(pm: MessagePublisher, size, text1, text2, status, base_send: Callable | None = None) -> Callable:
   def _send() -> None:
-    alert = messaging.new_message('selfdriveState')
-    ss = alert.selfdriveState
-    ss.alertSize = size
-    ss.alertText1 = text1
-    ss.alertText2 = text2
-    ss.alertStatus = status
-    pm.send('selfdriveState', alert)
+    if base_send is not None:
+      base_send(alert_size=size, alert_text1=text1, alert_text2=text2, alert_status=status)
+    else:
+      alert = messaging.new_message('selfdriveState')
+      ss = alert.selfdriveState
+      ss.alertSize = size
+      ss.alertText1 = text1
+      ss.alertText2 = text2
+      ss.alertStatus = status
+      pm.send('selfdriveState', alert)
   return _send
 
 
-def test_onroad_alerts(script: Script, pm: PubMaster) -> None:
+def test_onroad_alerts(script: Script, pm: PubMaster, base_send: Callable | None = None) -> None:
   """Go through various alert types and sizes and add them to the script to test alert rendering.
     Each alert is sent as a separate event with a delay in between."""
   # Small alert (normal)
-  script.set_send(make_alert_setup(pm, AlertSize.small, "Small Alert", "This is a small alert", AlertStatus.normal))
+  script.set_send(make_alert_setup(pm, AlertSize.small, "Small Alert", "This is a small alert", AlertStatus.normal, base_send))
   # Medium alert (userPrompt)
-  script.set_send(make_alert_setup(pm, AlertSize.mid, "Medium Alert", "This is a medium alert", AlertStatus.userPrompt))
+  script.set_send(make_alert_setup(pm, AlertSize.mid, "Medium Alert", "This is a medium alert", AlertStatus.userPrompt, base_send))
+  # Long medium alert exercises modern typography fitting without changing engagement state.
+  script.set_send(make_alert_setup(pm, AlertSize.mid, "Smart/Adaptive Cruise Control: OFF",
+                                   "Manual Speed Control Required", AlertStatus.userPrompt, base_send))
   # Full alert (critical)
-  script.set_send(make_alert_setup(pm, AlertSize.full, "DISENGAGE IMMEDIATELY", "Driver Distracted", AlertStatus.critical))
+  script.set_send(make_alert_setup(pm, AlertSize.full, "DISENGAGE IMMEDIATELY", "Driver Distracted", AlertStatus.critical, base_send))
   # Full alert multiline
-  script.set_send(make_alert_setup(pm, AlertSize.full, "Reverse\nGear", "", AlertStatus.normal))
+  script.set_send(make_alert_setup(pm, AlertSize.full, "Reverse\nGear", "", AlertStatus.normal, base_send))
   # Full alert long text
-  script.set_send(make_alert_setup(pm, AlertSize.full, "TAKE CONTROL IMMEDIATELY", "Calibration Invalid: Remount Device & Recalibrate", AlertStatus.userPrompt))
+  script.set_send(make_alert_setup(pm, AlertSize.full, "TAKE CONTROL IMMEDIATELY", "Calibration Invalid: Remount Device & Recalibrate",
+                                          AlertStatus.userPrompt, base_send))
 
 
 # --- Script builders ---
@@ -401,6 +562,12 @@ def build_tizi_script(pm: PubMaster, main_layout, script: Script) -> None:
   def add_prime_state_setup(prime_type: PrimeType) -> None:
     script.set_send(lambda: set_prime_state(prime_type))
 
+  def setup_onroad_projection() -> None:
+    from openpilot.selfdrive.ui.layouts.main import MainState
+
+    onroad = main_layout._layouts[MainState.ONROAD]
+    onroad._calc_frame_matrix(onroad._content_rect)
+
   def do_onboarding() -> None:
     """Click through the training guide and close."""
     from openpilot.selfdrive.ui.layouts.onboarding import STEP_RECTS
@@ -515,9 +682,33 @@ def build_tizi_script(pm: PubMaster, main_layout, script: Script) -> None:
   script.click(250, 160)
 
   # === Onroad ===
-  script.set_send(lambda: send_onroad(pm))
+  script.set_send(lambda: send_big_onroad_scene(pm, control_mode="disengaged"))
   script.click(1000, 500)  # click onroad to toggle sidebar
-  test_onroad_alerts(script, pm)
+  script.setup(setup_onroad_projection, wait_after=0)
+  script.set_send(lambda: send_big_onroad_scene(pm, control_mode="full"), wait_after=WAIT_LONG)
+  script.set_send(lambda: send_big_onroad_scene(pm, control_mode="full", set_speed=255.0))
+  script.setup(lambda: setup_big_onroad_preferences(hide_v_ego_ui=True, is_metric=True), wait_after=0)
+  script.set_send(lambda: send_big_onroad_scene(
+    pm, control_mode="disengaged", set_speed=-1.0, cruise_available=False,
+    road_name="A Very Long Road Name That Must Stay Centred With The Sidebar Open",
+  ), wait_after=WAIT_LONG)
+  script.setup(setup_big_onroad_preferences, wait_after=0)
+  script.set_send(lambda: send_big_onroad_scene(pm, control_mode="lateral"))
+  script.set_send(lambda: send_big_onroad_scene(pm, control_mode="longitudinal"))
+  script.set_send(lambda: send_big_onroad_scene(pm, control_mode="override"))
+  # Successful left lane change: active manoeuvre followed by a controlled-path completion sweep.
+  script.set_send(lambda: send_big_onroad_scene(
+    pm, control_mode="lateral", openpilot_longitudinal_control=False,
+    lane_change_state=log.LaneChangeState.laneChangeStarting,
+    lane_change_direction=log.LaneChangeDirection.left, lane_change_probability=0.5,
+  ), wait_after=WAIT_LONG)
+  script.set_send(lambda: send_big_onroad_scene(
+    pm, control_mode="lateral", openpilot_longitudinal_control=False, lane_change_probability=0.01,
+  ))
+  def base_send(**alert) -> None:
+    send_big_onroad_scene(pm, control_mode="full", **alert)
+
+  test_onroad_alerts(script, pm, base_send)
 
   # End
   script.end()

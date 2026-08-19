@@ -1372,6 +1372,22 @@
           "description": "Overlays shown on the driving screen",
           "items": [
             {
+              "key": "ModernDrivingView",
+              "widget": "toggle",
+              "title": "Modern Driving View",
+              "description": "Use the mirror-safe bottom driving layout, blue control language, lane-change corridor, and engagement transitions.",
+              "visibility": [
+                {
+                  "type": "not",
+                  "condition": {
+                    "type": "capability",
+                    "field": "device_type",
+                    "equals": "mici"
+                  }
+                }
+              ]
+            },
+            {
               "key": "BlindSpot",
               "widget": "toggle",
               "title": "Show Blind Spot Warnings",

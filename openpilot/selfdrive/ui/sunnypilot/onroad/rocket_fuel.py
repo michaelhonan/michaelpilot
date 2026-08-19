@@ -48,3 +48,6 @@ class RocketFuel:
 
     if hha > 0:
       rl.draw_rectangle(int(rect.x), int(rect.y + ra_y), int(wp), int(hha / 2.0), color)
+
+  def render_modern(self, rect: rl.Rectangle, sm) -> None:
+    self.render(rect, sm)

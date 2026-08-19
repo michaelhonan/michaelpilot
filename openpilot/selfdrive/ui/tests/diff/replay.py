@@ -32,6 +32,9 @@ def setup_state():
   params.put("UpdaterCurrentReleaseNotes", parse_release_notes(BASEDIR), block=True)
   params.put("HasAcceptedTermsSP", terms_version_sp, block=True)
   params.put("CompletedSunnylinkConsentVersion", sunnylink_consent_version, block=True)
+  params.put_bool("ModernDrivingView", True, block=True)
+  params.put_bool("RoadNameToggle", True, block=True)
+  params.put("SpeedLimitMode", 1, block=True)
   # Params for mici home
   params.put("Version", "0.10.1", block=True)
   params.put("GitBranch", "test-branch", block=True)
@@ -67,7 +70,11 @@ def run_replay(variant: LayoutVariant) -> None:
   # and after 30s of real wall-clock time the settings panel would close automatically.
   device.set_override_interactive_timeout(99999)
 
-  pm = PubMaster(["deviceState", "pandaStates", "driverStateV2", "selfdriveState"])
+  pm = PubMaster([
+    "deviceState", "pandaStates", "driverStateV2", "driverMonitoringState", "selfdriveState", "selfdriveStateSP",
+    "controlsState", "carState", "carControl", "carParams", "longitudinalPlan", "longitudinalPlanSP",
+    "modelV2", "radarState", "extrinsicsCalibration", "wideRoadCameraState", "liveMapDataSP",
+  ])
   script = build_script(pm, main_layout, variant)
   script_index = 0
 
@@ -101,6 +108,8 @@ def run_replay(variant: LayoutVariant) -> None:
         send_fn()
 
       ui_state.update()
+      if ui_state.started and os.getenv("MIRROR_GUIDE") == "1":
+        rl.draw_rectangle(0, 0, gui_app.width, int(gui_app.height * 0.3), rl.Color(0, 0, 0, 185))
 
       frame += 1
       pbar.update(1)
@@ -117,12 +126,15 @@ def run_replay(variant: LayoutVariant) -> None:
 def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('--big', action='store_true', help='Use big UI layout (tizi/tici) instead of mici layout')
+  parser.add_argument('--mirror-guide', action='store_true', help='Mask the top 30% while recording onroad review frames')
   args = parser.parse_args()
 
   variant: LayoutVariant = 'tizi' if args.big else 'mici'
 
   if args.big:
     os.environ["BIG"] = "1"
+  if args.mirror_guide:
+    os.environ["MIRROR_GUIDE"] = "1"
   os.environ["RECORD"] = "1"
   os.environ["RECORD_QUALITY"] = "0"  # Use CRF 0 ("lossless" encode) for deterministic output across different machines
   os.environ["RECORD_OUTPUT"] = os.path.join(DIFF_OUT_DIR, os.environ.get("RECORD_OUTPUT", f"{variant}_ui_replay.mp4"))

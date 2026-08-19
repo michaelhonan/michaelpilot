@@ -110,6 +110,14 @@ class TurnSignalController:
     if self._right_signal._active:
       self._right_signal.render(rl.Rectangle(right_x, right_y, self._config.size, self._config.size))
 
+  def render_modern(self, left_rect: rl.Rectangle, right_rect: rl.Rectangle) -> None:
+    if not ui_state.turn_signals and not ui_state.blindspot:
+      return
+    if self._left_signal._active:
+      self._left_signal.render(left_rect)
+    if self._right_signal._active:
+      self._right_signal.render(right_rect)
+
   @property
   def config(self) -> TurnSignalConfig:
     return self._config
