@@ -11,7 +11,6 @@ from openpilot.system.ui.widgets import Widget
 
 from openpilot.selfdrive.ui.sunnypilot.layouts.sidebar import SidebarSP
 
-SIDEBAR_WIDTH = 300
 METRIC_HEIGHT = 126
 METRIC_WIDTH = 240
 METRIC_MARGIN = 30

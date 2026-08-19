@@ -103,3 +103,22 @@ class SmartCruiseControlRenderer(Widget):
     if self.map_enabled:
       alpha = self._map_fade.alpha if self.map_active else 1.0
       self._draw_icon(rect.x + rect.width / 2, rect.height, x_offset, y_scc_m, "SCC-M", alpha)
+
+  def render_modern(self, rect: rl.Rectangle, control_color: rl.Color) -> None:
+    enabled = []
+    if self.vision_enabled:
+      enabled.append(("SCC-V", self._vision_fade.alpha if self.vision_active else 1.0))
+    if self.map_enabled:
+      enabled.append(("SCC-M", self._map_fade.alpha if self.map_active else 1.0))
+    if not enabled:
+      return
+
+    gap = 12
+    box_width = (rect.width - gap * (len(enabled) - 1)) / len(enabled)
+    for index, (text, alpha) in enumerate(enabled):
+      box = rl.Rectangle(rect.x + index * (box_width + gap), rect.y, box_width, rect.height)
+      fill = rl.Color(control_color.r, control_color.g, control_color.b, int(max(0.15, alpha) * 205))
+      rl.draw_rectangle_rounded(box, 0.22, 10, fill)
+      size = measure_text_cached(self.font, text, 34)
+      pos = rl.Vector2(box.x + (box.width - size.x) / 2, box.y + (box.height - size.y) / 2)
+      rl.draw_text_ex(self.font, text, pos, 34, 0, rl.WHITE)

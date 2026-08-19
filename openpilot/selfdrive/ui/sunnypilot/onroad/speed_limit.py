@@ -124,6 +124,14 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
   def speed_conv(self):
     return CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
 
+  @property
+  def has_visible_limit(self) -> bool:
+    return self.speed_limit_valid or self.speed_limit_last_valid
+
+  @property
+  def should_render_modern(self) -> bool:
+    return ui_state.speed_limit_mode != SpeedLimitMode.off and self.has_visible_limit
+
   def update(self):
     SpeedLimitAlertRenderer.update(self)
     sm = ui_state.sm
@@ -196,6 +204,41 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
         self._draw_pre_active_arrow(sign_rect)
       else:
         self._draw_ahead_info(sign_rect)
+
+  def render_modern(self, sign_rect: rl.Rectangle) -> None:
+    if ui_state.speed_limit_mode == SpeedLimitMode.off or not self.has_visible_limit:
+      return
+
+    alpha = self._pre_active_fade.alpha
+    self._draw_sign_main(sign_rect, alpha)
+    if self.speed_limit_assist_state == AssistState.preActive:
+      self._draw_pre_active_arrow_modern(sign_rect)
+    else:
+      self._draw_ahead_info_modern(sign_rect)
+
+  def _draw_pre_active_arrow_modern(self, sign_rect: rl.Rectangle) -> None:
+    _, texture, icon_alpha, _, _ = SpeedLimitAlertRenderer.speed_limit_pre_active_icon_helper(self)
+    if icon_alpha <= 0 or texture == self.arrow_blank:
+      return
+    scale = 0.32
+    x = sign_rect.x + sign_rect.width - texture.width * scale
+    y = sign_rect.y - texture.height * scale - 8
+    rl.draw_texture_ex(texture, rl.Vector2(x, y), 0.0, scale, rl.Color(255, 255, 255, int(icon_alpha)))
+
+  def _draw_ahead_info_modern(self, sign_rect: rl.Rectangle) -> None:
+    source_is_map = self.speed_limit_source == SpeedLimitSource.map
+    valid = self.speed_limit_ahead_valid and self.speed_limit_ahead > 0 and self.speed_limit_ahead != self.speed_limit
+    if not (valid and source_is_map):
+      return
+
+    ahead_text = f"AHEAD  {round(self.speed_limit_ahead)}"
+    font_size = 32
+    text_size = measure_text_cached(self.font_demi, ahead_text, font_size)
+    width = max(sign_rect.width, text_size.x + 26)
+    rect = rl.Rectangle(sign_rect.x + (sign_rect.width - width) / 2, sign_rect.y - 58, width, 48)
+    rl.draw_rectangle_rounded(rect, 0.25, 8, Colors.SUB_BG)
+    self._draw_text_centered(self.font_demi, ahead_text, font_size,
+                             rl.Vector2(rect.x + rect.width / 2, rect.y + rect.height / 2), Colors.WHITE)
 
   def _draw_sign_main(self, rect, alpha=1.0):
     speed_limit_warning_enabled = ui_state.speed_limit_mode is not None and ui_state.speed_limit_mode >= SpeedLimitMode.warning

@@ -11,6 +11,12 @@ sections:
   title: HUD Elements
   description: Overlays shown on the driving screen
   items:
+  - key: ModernDrivingView
+    widget: toggle
+    title: Modern Driving View
+    description: Use the mirror-safe bottom driving layout, blue control language, lane-change corridor, and engagement transitions.
+    visibility:
+    - $ref: '#/macros/hide_on_mici'
   - key: BlindSpot
     widget: toggle
     title: Show Blind Spot Warnings
