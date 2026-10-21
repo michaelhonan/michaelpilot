@@ -95,7 +95,7 @@ def test_alert_zone_is_inside_the_camera_below_the_mirror_and_clear_of_the_strip
       assert rect_contains(layout.camera, safe)
       assert safe.y >= layout.camera.y + layout.camera.height * 0.3
       assert not rectangles_overlap(safe, layout.strip)
-      assert safe.width <= 1200
+      assert safe.x == layout.camera.x + 40
 
 
 def test_developer_ui_reserves_space_in_the_alert_zone_only():
@@ -106,7 +106,7 @@ def test_developer_ui_reserves_space_in_the_alert_zone_only():
 
   assert rect_bottom(base.alert_safe) - rect_bottom(bottom.alert_safe) == BOTTOM_DEV_UI_RESERVE
   assert rect_bottom(right.alert_safe) - rect_bottom(both.alert_safe) == BOTTOM_DEV_UI_RESERVE
-  assert rect_center_x(base.alert_safe) - rect_center_x(right.alert_safe) == RIGHT_DEV_UI_RESERVE / 2
+  assert base.alert_safe.width - right.alert_safe.width == RIGHT_DEV_UI_RESERVE
   for layout in (bottom, right, both):
     assert rect_tuple(layout.camera) == rect_tuple(base.camera)
     assert rect_tuple(layout.strip) == rect_tuple(base.strip)

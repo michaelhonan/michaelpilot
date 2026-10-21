@@ -6,7 +6,7 @@ from openpilot.selfdrive.ui.onroad.alert_renderer import Alert, AlertSize, Alert
 from openpilot.selfdrive.ui.sunnypilot.onroad import alert_renderer as alert_renderer_module
 from openpilot.selfdrive.ui.sunnypilot.onroad.alert_renderer import (
   MODERN_COMPACT_MID_MIN_BODY_FONT, MODERN_COMPACT_MID_MIN_TITLE_FONT,
-  MODERN_MID_MIN_BODY_FONT, MODERN_MID_MIN_TITLE_FONT, AlertRendererSP,
+  MODERN_MID_MIN_BODY_FONT, MODERN_MID_MIN_TITLE_FONT, MODERN_SMALL_MIN_FONT, AlertRendererSP,
 )
 from openpilot.selfdrive.ui.sunnypilot.onroad.modern_view import build_modern_layout
 
@@ -54,7 +54,7 @@ def test_known_medium_alert_fits_sidebar_and_right_developer_ui_gap(monkeypatch)
   )
   layout = build_modern_layout(rl.Rectangle(300, 0, 1860, 1080), developer_ui=3)
 
-  assert layout.alert_safe.width == 1200
+  assert layout.alert_safe.width == 1806 - 2 * 40 - 244
   fit = renderer._fit_modern_alert(alert, int(layout.alert_safe.width), int(layout.alert_safe.height))
   assert fit is not None
   _, _, title_size, body_size, _, _, surface_height = fit
@@ -73,3 +73,20 @@ def test_oversized_medium_alert_requests_full_screen_fallback(monkeypatch):
   )
 
   assert renderer._fit_modern_alert(alert, 720, 420) is None
+
+
+def test_alert_shrinks_onto_one_line_before_wrapping(monkeypatch):
+  renderer = make_renderer(monkeypatch)
+  alert = Alert(
+    text1="Steer Right to Start Lane Change Once Safe",
+    text2="",
+    size=AlertSize.small,
+    status=AlertStatus.normal,
+  )
+  layout = build_modern_layout(rl.Rectangle(0, 0, 2160, 1080))
+
+  fit = renderer._fit_modern_alert(alert, int(layout.alert_safe.width), int(layout.alert_safe.height))
+  assert fit is not None
+  title_lines, _, title_size, _, _, _, _ = fit
+  assert len(title_lines) == 1
+  assert title_size >= MODERN_SMALL_MIN_FONT

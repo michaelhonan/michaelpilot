@@ -101,26 +101,33 @@ class AlertRendererSP(AlertRenderer):
         (MODERN_COMPACT_ALERT_PADDING, MODERN_COMPACT_MID_MIN_TITLE_FONT, MODERN_COMPACT_MID_MIN_BODY_FONT),
       )
 
+    # Alerts span the camera width, so first try shrinking the text onto one line per field: a wide, short alert
+    # hides less of the road than a tall wrapped one. Only wrap when even the minimum size will not fit.
     fit = None
-    for padding, min_title, min_body in fit_specs:
-      wrap_width = width - 2 * padding
-      if wrap_width <= 0 or max_height <= 2 * padding:
-        continue
-      max_steps = max((start_title - min_title) // MODERN_FONT_STEP,
-                      (start_body - min_body) // MODERN_FONT_STEP)
-      for step in range(max_steps + 1):
-        title_size = max(min_title, start_title - step * MODERN_FONT_STEP)
-        body_size = max(min_body, start_body - step * MODERN_FONT_STEP)
-        title_lines = tuple(wrap_text(self.font_bold, alert.text1, title_size, wrap_width))
-        body_lines = tuple(wrap_text(self.font_regular, alert.text2, body_size, wrap_width)) if alert.text2 and body_size else ()
-        title_height = measure_text_cached(self.font_bold, "A", title_size).y
-        body_height = measure_text_cached(self.font_regular, "A", body_size).y if body_lines else 0.0
-        text_height = len(title_lines) * title_height
-        if body_lines:
-          text_height += ALERT_LINE_SPACING + len(body_lines) * body_height
-        surface_height = math.ceil(text_height + 2 * padding)
-        if surface_height <= max_height:
-          fit = (title_lines, body_lines, title_size, body_size, title_height, body_height, surface_height)
+    for single_line in (True, False):
+      for padding, min_title, min_body in fit_specs:
+        wrap_width = width - 2 * padding
+        if wrap_width <= 0 or max_height <= 2 * padding:
+          continue
+        max_steps = max((start_title - min_title) // MODERN_FONT_STEP,
+                        (start_body - min_body) // MODERN_FONT_STEP)
+        for step in range(max_steps + 1):
+          title_size = max(min_title, start_title - step * MODERN_FONT_STEP)
+          body_size = max(min_body, start_body - step * MODERN_FONT_STEP)
+          title_lines = tuple(wrap_text(self.font_bold, alert.text1, title_size, wrap_width))
+          body_lines = tuple(wrap_text(self.font_regular, alert.text2, body_size, wrap_width)) if alert.text2 and body_size else ()
+          if single_line and (len(title_lines) > 1 or len(body_lines) > 1):
+            continue
+          title_height = measure_text_cached(self.font_bold, "A", title_size).y
+          body_height = measure_text_cached(self.font_regular, "A", body_size).y if body_lines else 0.0
+          text_height = len(title_lines) * title_height
+          if body_lines:
+            text_height += ALERT_LINE_SPACING + len(body_lines) * body_height
+          surface_height = math.ceil(text_height + 2 * padding)
+          if surface_height <= max_height:
+            fit = (title_lines, body_lines, title_size, body_size, title_height, body_height, surface_height)
+            break
+        if fit is not None:
           break
       if fit is not None:
         break
