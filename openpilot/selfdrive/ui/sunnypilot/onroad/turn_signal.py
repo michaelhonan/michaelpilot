@@ -38,19 +38,27 @@ class TurnSignalWidget(Widget):
     self._blind_spot_texture = gui_app.texture('icons_mici/onroad/blind_spot_left.png', 120, 109, flip_x=(direction == IconSide.right))
     self._texture = self._signal_texture
 
+  def _update_alpha(self) -> int:
+    if self._type != 'signal':
+      return 255
+    if time.monotonic() - self._turn_signal_timer > TURN_SIGNAL_BLINK_PERIOD:
+      self._turn_signal_timer = time.monotonic()
+      self._turn_signal_alpha_filter.x = 255 * 2
+    else:
+      self._turn_signal_alpha_filter.update(255 * 0.2)
+    return int(min(self._turn_signal_alpha_filter.x, 255))
+
+  def strip_state(self) -> tuple[str | None, int]:
+    """Active indicator type ('signal' or 'blind_spot') and its blink alpha, for the modern dash strip."""
+    if not self._active:
+      return None, 0
+    return self._type, self._update_alpha()
+
   def _render(self, _):
     if not self._active:
       return
 
-    if self._type == 'signal':
-      if time.monotonic() - self._turn_signal_timer > TURN_SIGNAL_BLINK_PERIOD:
-        self._turn_signal_timer = time.monotonic()
-        self._turn_signal_alpha_filter.x = 255 * 2
-      else:
-        self._turn_signal_alpha_filter.update(255 * 0.2)
-      icon_alpha = int(min(self._turn_signal_alpha_filter.x, 255))
-    else:
-      icon_alpha = 255
+    icon_alpha = self._update_alpha()
 
     self._texture = self._blind_spot_texture if self._type == 'blind_spot' else self._signal_texture
 
@@ -110,13 +118,8 @@ class TurnSignalController:
     if self._right_signal._active:
       self._right_signal.render(rl.Rectangle(right_x, right_y, self._config.size, self._config.size))
 
-  def render_modern(self, left_rect: rl.Rectangle, right_rect: rl.Rectangle) -> None:
-    if not ui_state.turn_signals and not ui_state.blindspot:
-      return
-    if self._left_signal._active:
-      self._left_signal.render(left_rect)
-    if self._right_signal._active:
-      self._right_signal.render(right_rect)
+  def strip_states(self) -> tuple[tuple[str | None, int], tuple[str | None, int]]:
+    return self._left_signal.strip_state(), self._right_signal.strip_state()
 
   @property
   def config(self) -> TurnSignalConfig:

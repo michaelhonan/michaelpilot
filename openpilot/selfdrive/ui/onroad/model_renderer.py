@@ -1,14 +1,16 @@
 import colorsys
 import numpy as np
 import pyray as rl
-from openpilot.cereal import log, messaging
+from openpilot.cereal import messaging
 from opendbc.car.structs import car
 from dataclasses import dataclass, field
+from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
 from openpilot.selfdrive.locationd.calibrationd import HEIGHT_INIT
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.system.ui.lib.application import gui_app
+from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient
+from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 
 from openpilot.selfdrive.ui.sunnypilot.onroad.model_renderer import ChevronMetrics, ModelRendererSP
@@ -16,9 +18,8 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.modern_view import (
   DEFAULT_MODERN_CONTRAST, LANE_LINE_WHITE, ModernContrast, NEUTRAL_GEOMETRY,
 )
 from openpilot.selfdrive.ui.sunnypilot.onroad.modern_road import (
-  CLASSIC_LANE_LINE_HALF_WIDTH, MODERN_LANE_LINE_HALF_WIDTH, LaneChangeAnimator, LaneChangeIntent,
-  LaneChangeVisualInput, LaneChangeVisualOutput, LaneChangeVisualPhase, advance_transition,
-  lane_line_style, path_style, road_edge_alpha, slice_ribbon,
+  CLASSIC_LANE_LINE_HALF_WIDTH, MODERN_LANE_LINE_HALF_WIDTH, MODERN_PATH_EDGE_HALF_WIDTH, LeadSpeedLabel, LeadTrend,
+  advance_transition, lane_line_style, lead_speed_label, path_style, road_edge_alpha, slice_ribbon,
 )
 
 CLIP_MARGIN = 500
@@ -31,13 +32,25 @@ STOCK_PATH_GRADIENT = Gradient(
   colors=[rl.Color(13, 248, 122, 102), rl.Color(114, 255, 92, 89), rl.Color(114, 255, 92, 0)],
   stops=[0.0, 0.5, 1.0],
 )
-LaneChangeState = log.LaneChangeState
 ENGAGE_SWEEP_SECONDS = 0.6
 DISENGAGE_SWEEP_SECONDS = 0.35
-LANE_CHANGE_LOCK_BAND_HALF_WIDTH = 0.1
-LANE_CHANGE_LOCK_ALPHA = 190
-LANE_CHANGE_LEFT_DESIRE_INDEX = 3
-LANE_CHANGE_RIGHT_DESIRE_INDEX = 4
+
+# Modern lead marker: a bracket across the path at the lead's rear bumper and a pill with the lead's speed.
+LEAD_BRACKET_HALF_WIDTH = 0.9  # m either side of the lead centre
+LEAD_SPEED_FILTER_RC = 0.5  # s
+LEAD_PILL_HEIGHT = 74
+LEAD_PILL_GAP = 42
+LEAD_PILL_PADDING_X = 26
+LEAD_ARROW_SIZE = 28
+LEAD_SPEED_FONT_SIZE = 35
+LEAD_UNIT_FONT_SIZE = 23
+LEAD_PILL_BG = rl.Color(0, 0, 0, 168)
+LEAD_UNIT_COLOR = rl.Color(0xAA, 0xB2, 0xBD, 0xFF)
+LEAD_TREND_COLORS = {
+  LeadTrend.closing: rl.Color(0xF5, 0xA1, 0x5F, 0xFF),
+  LeadTrend.matching: rl.Color(0xE6, 0xE9, 0xEE, 0xFF),
+  LeadTrend.pulling_away: rl.Color(0x5F, 0xD4, 0xC4, 0xFF),
+}
 
 
 @dataclass
@@ -70,10 +83,13 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     self._lane_lines = [ModelPoints() for _ in range(4)]
     self._road_edges = [ModelPoints() for _ in range(2)]
     self._acceleration_x = np.empty((0,), dtype=np.float32)
-    self._lane_change_state = LaneChangeState.off
-    self._lane_change_desire_probability: float | None = None
-    self._lane_change_animator = LaneChangeAnimator()
-    self._lane_change_visual: LaneChangeVisualOutput = self._lane_change_animator.output()
+    self._path_edges = [ModelPoints(), ModelPoints()]
+    self._lead_bracket: tuple[rl.Vector2, rl.Vector2] | None = None
+    self._lead_label: LeadSpeedLabel | None = None
+    self._lead_speed_filter = FirstOrderFilter(0.0, LEAD_SPEED_FILTER_RC, 1 / gui_app.target_fps)
+    self._lead_speed_initialized = False
+    self._font_bold = gui_app.font(FontWeight.BOLD)
+    self._font_medium = gui_app.font(FontWeight.MEDIUM)
     self._engagement_progress = 0.0
     self._engagement_target = 0.0
     self._engagement_sweep_active = False
@@ -111,7 +127,6 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     # Check if data is up-to-date
     if (sm.recv_frame["extrinsicsCalibration"] < ui_state.started_frame or
         sm.recv_frame["modelV2"] < ui_state.started_frame):
-      self._reset_lane_change_visuals()
       return
 
     # Set up clipping region
@@ -133,7 +148,11 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     model = sm['modelV2']
     radar_state = sm['radarState'] if sm.valid['radarState'] else None
     lead_one = radar_state.leadOne if radar_state else None
-    render_lead_indicator = self._longitudinal_control and radar_state is not None
+    modern = ui_state.modern_driving_view
+    # The modern lead marker is informational, so it shows even when the car's own cruise does the following.
+    render_lead_indicator = self._longitudinal_control and radar_state is not None and not modern
+    if modern:
+      self._update_lead_label(lead_one)
 
     # Update model data when needed
     model_updated = sm.updated['modelV2']
@@ -143,19 +162,21 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
 
       path_x_array = self._path.raw_points[:, 0]
       if path_x_array.size == 0:
-        self._reset_lane_change_visuals()
         return
 
       self._update_model(lead_one, path_x_array)
       if render_lead_indicator:
         self._update_leads(radar_state, path_x_array)
+      if modern:
+        self._update_lead_bracket(lead_one, path_x_array)
       self._transform_dirty = False
 
     # Draw elements
     self._update_modern_animations()
     self._draw_lane_lines()
     self._draw_path()
-    self._draw_lane_change_completion_sweep()
+    if modern:
+      self._draw_lead_marker()
 
     if render_lead_indicator and radar_state:
       self._draw_lead_indicator()
@@ -174,14 +195,6 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     self._lane_line_probs = np.array(model.laneLineProbs, dtype=np.float32)
     self._road_edge_stds = np.array(model.roadEdgeStds, dtype=np.float32)
     self._acceleration_x = np.array(model.acceleration.x, dtype=np.float32)
-    self._lane_change_state = model.meta.laneChangeState
-    desire_state = model.meta.desireState
-    if len(desire_state) > LANE_CHANGE_RIGHT_DESIRE_INDEX:
-      self._lane_change_desire_probability = float(
-        desire_state[LANE_CHANGE_LEFT_DESIRE_INDEX] + desire_state[LANE_CHANGE_RIGHT_DESIRE_INDEX]
-      )
-    else:
-      self._lane_change_desire_probability = None
 
   def _update_leads(self, radar_state, path_x_array):
     """Update positions of lead vehicles"""
@@ -216,14 +229,26 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       road_edge.projected_points = self._map_line_to_polygon(road_edge.raw_points, 0.025, 0.0, max_idx, max_distance)
 
     # Update path using raw points
-    if lead and lead.present:
+    if ui_state.modern_driving_view:
+      # The path stops at the lead marker's bracket.
+      if lead and self._lead_label is not None:
+        max_distance = np.clip(lead.dRel, 0.0, max_distance)
+    elif lead and lead.present:
       lead_d = lead.dRel * 2.0
       max_distance = np.clip(lead_d - min(lead_d * 0.35, 10.0), 0.0, max_distance)
 
     max_idx = self._get_path_length_idx(path_x_array, max_distance)
+    path_half_width = self._get_path_half_width()
     self._path.projected_points = self._map_line_to_polygon(
-      self._path.raw_points, self._get_path_half_width(), self._path_offset_z, max_idx, max_distance, allow_invert=False
+      self._path.raw_points, path_half_width, self._path_offset_z, max_idx, max_distance, allow_invert=False
     )
+
+    if ui_state.modern_driving_view:
+      for edge, side in zip(self._path_edges, (-1.0, 1.0), strict=True):
+        edge_points = self._path.raw_points + np.array([0.0, side * path_half_width, 0.0], dtype=np.float32)
+        edge.projected_points = self._map_line_to_polygon(
+          edge_points, MODERN_PATH_EDGE_HALF_WIDTH, self._path_offset_z, max_idx, max_distance, allow_invert=False
+        )
 
     self._update_path_gradient()
 
@@ -231,7 +256,6 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
     modern = ui_state.modern_driving_view
     engaged = ui_state.engaged
     if not modern:
-      self._reset_lane_change_visuals()
       self._engagement_progress = 1.0 if engaged else 0.0
       self._engagement_target = self._engagement_progress
       self._engagement_sweep_active = False
@@ -257,45 +281,73 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
         self._engagement_progress, self._engagement_target, duration, dt,
       )
 
-    model_available = bool(ui_state.sm.alive['modelV2'])
-    lateral_available = bool(ui_state.sm.alive['carControl'] and ui_state.sm['carControl'].latActive)
-    visual_input = LaneChangeVisualInput(
-      intent=self._visual_lane_change_intent(self._lane_change_state) if model_available else LaneChangeIntent.off,
-      lateral_active=lateral_available and model_available,
-      desire_probability=self._lane_change_desire_probability if model_available else None,
-    )
-    self._lane_change_visual = self._lane_change_animator.update(visual_input, dt)
+  def _update_lead_label(self, lead) -> None:
+    label = None
+    if lead is not None:
+      if not self._lead_speed_initialized or not lead.present:
+        self._lead_speed_filter.x = lead.vLeadK
+        self._lead_speed_initialized = lead.present
+      v_lead = self._lead_speed_filter.update(lead.vLeadK)
+      label = lead_speed_label(lead.present, lead.radar, lead.modelProb, v_lead, lead.vRel, ui_state.is_metric)
+    else:
+      self._lead_speed_initialized = False
+    self._lead_label = label
 
-  @staticmethod
-  def _visual_lane_change_intent(state: object) -> LaneChangeIntent:
-    if state == LaneChangeState.preLaneChange:
-      return LaneChangeIntent.requested
-    if state == LaneChangeState.laneChangeStarting:
-      return LaneChangeIntent.active
-    if state == LaneChangeState.laneChangeFinishing:
-      return LaneChangeIntent.finishing
-    return LaneChangeIntent.off
+  def _update_lead_bracket(self, lead, path_x_array) -> None:
+    self._lead_bracket = None
+    if lead is None or not lead.present:
+      return
+    idx = self._get_path_length_idx(path_x_array, lead.dRel)
+    z = (self._path.raw_points[idx, 2] if idx < len(self._path.raw_points) else 0.0) + self._path_offset_z
+    y = -lead.yRel + self._camera_offset
+    left = self._map_to_screen(lead.dRel, y - LEAD_BRACKET_HALF_WIDTH, z)
+    right = self._map_to_screen(lead.dRel, y + LEAD_BRACKET_HALF_WIDTH, z)
+    if left and right:
+      if left[0] > right[0]:
+        left, right = right, left
+      self._lead_bracket = (rl.Vector2(*left), rl.Vector2(*right))
 
-  def _reset_lane_change_visuals(self) -> None:
-    if (self._lane_change_animator.phase == LaneChangeVisualPhase.idle and
-        self._lane_change_animator.previous_intent == LaneChangeIntent.off):
+  def _draw_lead_marker(self) -> None:
+    label = self._lead_label
+    if label is None or self._lead_bracket is None:
       return
-    self._lane_change_animator.reset()
-    self._lane_change_visual = self._lane_change_animator.output()
 
-  def _draw_lane_change_completion_sweep(self) -> None:
-    position = self._lane_change_visual.lock_sweep_position
-    if position is None or not self._path.projected_points.size:
-      return
-    polygon = slice_ribbon(
-      self._path.projected_points,
-      max(0.0, position - LANE_CHANGE_LOCK_BAND_HALF_WIDTH),
-      min(1.0, position + LANE_CHANGE_LOCK_BAND_HALF_WIDTH),
-    )
-    if not polygon.size:
-      return
-    blue = self._modern_contrast.control_blue
-    draw_polygon(self._rect, polygon, rl.Color(blue.r, blue.g, blue.b, LANE_CHANGE_LOCK_ALPHA))
+    color = LEAD_TREND_COLORS[label.trend]
+    left, right = self._lead_bracket
+    width = right.x - left.x
+    tick = max(8.0, width * 0.08)
+    thickness = float(np.clip(width * 0.03, 3.0, 6.0))
+    bracket = (rl.Vector2(left.x, left.y - tick), left, right, rl.Vector2(right.x, right.y - tick))
+    for start, end in zip(bracket, bracket[1:], strict=False):
+      rl.draw_line_ex(start, end, thickness, color)
+
+    speed_size = measure_text_cached(self._font_bold, label.speed, LEAD_SPEED_FONT_SIZE)
+    unit_size = measure_text_cached(self._font_medium, label.unit, LEAD_UNIT_FONT_SIZE)
+    pill_width = 2 * LEAD_PILL_PADDING_X + LEAD_ARROW_SIZE + 14 + speed_size.x + 10 + unit_size.x
+    center_y = right.y - tick / 2
+    pill_x = min(right.x + LEAD_PILL_GAP, self._rect.x + self._rect.width - pill_width - 20)
+    pill = rl.Rectangle(pill_x, center_y - LEAD_PILL_HEIGHT / 2, pill_width, LEAD_PILL_HEIGHT)
+    if pill.x > right.x:
+      rl.draw_line_ex(rl.Vector2(right.x, center_y), rl.Vector2(pill.x, center_y), 3.0, rl.Color(color.r, color.g, color.b, 150))
+    rl.draw_rectangle_rounded(pill, 1.0, 16, LEAD_PILL_BG)
+
+    arrow_x = pill.x + LEAD_PILL_PADDING_X
+    half = LEAD_ARROW_SIZE / 2
+    if label.trend == LeadTrend.closing:
+      rl.draw_triangle(rl.Vector2(arrow_x, center_y - half * 0.8), rl.Vector2(arrow_x + half, center_y + half * 0.8),
+                       rl.Vector2(arrow_x + LEAD_ARROW_SIZE, center_y - half * 0.8), color)
+    elif label.trend == LeadTrend.pulling_away:
+      rl.draw_triangle(rl.Vector2(arrow_x + half, center_y - half * 0.8), rl.Vector2(arrow_x, center_y + half * 0.8),
+                       rl.Vector2(arrow_x + LEAD_ARROW_SIZE, center_y + half * 0.8), color)
+    else:
+      rl.draw_rectangle_rec(rl.Rectangle(arrow_x, center_y - 4, LEAD_ARROW_SIZE, 8), color)
+
+    text_x = arrow_x + LEAD_ARROW_SIZE + 14
+    speed_y = center_y - speed_size.y / 2
+    rl.draw_text_ex(self._font_bold, label.speed, rl.Vector2(text_x, speed_y), LEAD_SPEED_FONT_SIZE, 0, rl.WHITE)
+    unit_y = speed_y + speed_size.y * 0.8 - unit_size.y * 0.8
+    rl.draw_text_ex(self._font_medium, label.unit, rl.Vector2(text_x + speed_size.x + 10, unit_y),
+                    LEAD_UNIT_FONT_SIZE, 0, LEAD_UNIT_COLOR)
 
   def _update_path_gradient(self):
     if not self._longitudinal_control:
@@ -408,21 +460,28 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
       draw_polygon(self._rect, self._path.projected_points, gradient=STOCK_PATH_GRADIENT)
     else:
       if style == "blue":
-        blue = self._modern_contrast.control_blue
-        colors = [
-          rl.Color(min(255, blue.r + 18), min(255, blue.g + 18), min(255, blue.b + 10), 120),
-          rl.Color(blue.r, blue.g, blue.b, 96),
-          rl.Color(blue.r, blue.g, blue.b, 0),
-        ]
+        base = self._modern_contrast.lateral_only_blue if ui_state.status.value == "lat_only" else self._modern_contrast.control_blue
+        fill_alphas, edge = (118, 68, 20), self._modern_contrast.lateral_only_blue
       else:
-        colors = [rl.Color(NEUTRAL_GEOMETRY.r, NEUTRAL_GEOMETRY.g, NEUTRAL_GEOMETRY.b, a) for a in (102, 89, 0)]
+        base, fill_alphas, edge = NEUTRAL_GEOMETRY, (36, 22, 6), NEUTRAL_GEOMETRY
       gradient = Gradient(
         start=(0.0, 1.0),  # Bottom of path
         end=(0.0, 0.0),  # Top of path
-        colors=colors,
-        stops=[0.0, 0.5, 1.0],
+        colors=[rl.Color(base.r, base.g, base.b, a) for a in fill_alphas],
+        stops=[0.0, 0.45, 1.0],
       )
       draw_polygon(self._rect, self._path.projected_points, gradient=gradient)
+
+      edge_alphas = (240, 150, 76) if style == "blue" else (150, 90, 40)
+      edge_gradient = Gradient(
+        start=(0.0, 1.0),
+        end=(0.0, 0.0),
+        colors=[rl.Color(edge.r, edge.g, edge.b, a) for a in edge_alphas],
+        stops=[0.0, 0.5, 1.0],
+      )
+      for path_edge in self._path_edges:
+        if path_edge.projected_points.size:
+          draw_polygon(self._rect, path_edge.projected_points, gradient=edge_gradient)
 
     self._draw_engagement_sweep()
 

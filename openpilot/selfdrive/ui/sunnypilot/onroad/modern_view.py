@@ -1,4 +1,4 @@
-"""Shared geometry and visual tokens for the big-UI modern driving view.
+"""Shared geometry and visual tokens for the big-UI modern driving view (camera above a dash strip).
 
 This module deliberately has no dependency on UI state or a renderer.  It is
 safe for the HUD, alerts, road visualisation, and layout tests to import without
@@ -8,6 +8,7 @@ creating an onroad import cycle.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 import pyray as rl
 
@@ -20,16 +21,20 @@ BLOCKED_RED = rl.Color(0xC9, 0x22, 0x31, 0xFF)
 NEUTRAL_GEOMETRY = rl.Color(0xF2, 0xF2, 0xF2, 0xFF)
 LANE_LINE_WHITE = rl.Color(0xFF, 0xFF, 0xFF, 0xFF)
 
-MODERN_FRAME_THICKNESS = 15
-RIGHT_MARGIN = 48
-BOTTOM_MARGIN = 42
-SPEED_PANEL_WIDTH = 590
-SPEED_PANEL_HEIGHT = 220
-ROAD_NAME_HEIGHT = 64
-UTILITY_SIZE = 192
+SCREEN_MARGIN = 15
+MODERN_FRAME_THICKNESS = 12
+STRIP_HEIGHT = 190
+STRIP_GAP = 20
+STRIP_PADDING_X = 40
+STRIP_COLUMN_GAP = 32
+STATUS_ZONE_WIDTH = 560
+SPEED_ZONE_WIDTH = 720
+ALERT_MARGIN = 40
+ALERT_MAX_WIDTH = 1200
+ALERT_MAX_HEIGHT = 460
+MIRROR_OCCLUSION_FRACTION = 0.3
 RIGHT_DEV_UI_RESERVE = 244
 BOTTOM_DEV_UI_RESERVE = 60
-ELEMENT_GAP = 28
 
 
 @dataclass(frozen=True)
@@ -39,38 +44,43 @@ class ModernContrast:
   text_shadow_alpha: int
 
 
-@dataclass(frozen=True)
-class ModernTypography:
-  panel_label: int = 32
-  panel_value: int = 86
-  panel_unit: int = 28
-  road_name: int = 40
-  utility: int = 40
+class SegmentTone(StrEnum):
+  off = "off"
+  active = "active"
+  paused = "paused"
 
 
 @dataclass(frozen=True)
-class ModernSurfaces:
-  panel_alpha: int = 170
-  utility_alpha: int = 118
-  panel_roundness: float = 0.18
-  panel_border_width: int = 4
+class StripStatus:
+  steer_tone: SegmentTone
+  steer_label: str
+  cruise_tone: SegmentTone
 
 
 @dataclass(frozen=True)
 class ModernLayout:
-  speed_panel: rl.Rectangle
-  road_name: rl.Rectangle
-  experimental_control: rl.Rectangle
-  acceleration_bar: rl.Rectangle
-  smart_cruise: rl.Rectangle
-  circular_alert: rl.Rectangle
+  camera_frame: rl.Rectangle
+  camera: rl.Rectangle
+  strip: rl.Rectangle
+  status_zone: rl.Rectangle
+  centre_zone: rl.Rectangle
+  speed_zone: rl.Rectangle
   alert_safe: rl.Rectangle
-  left_signal: rl.Rectangle
-  right_signal: rl.Rectangle
 
 
-MODERN_TYPOGRAPHY = ModernTypography()
-MODERN_SURFACES = ModernSurfaces()
+def strip_status(lateral_active: bool, status: str, cruise_enabled: bool) -> StripStatus:
+  """Split control state into the strip's STEERING and CRUISE segments.
+
+  Steering follows what openpilot is actually commanding; cruise follows the car's own cruise state, so a stock-ACC
+  car still shows when its cruise is engaged.
+  """
+  if lateral_active:
+    steer_tone, steer_label = SegmentTone.active, "STEERING"
+  elif status == "override":
+    steer_tone, steer_label = SegmentTone.paused, "PAUSED"
+  else:
+    steer_tone, steer_label = SegmentTone.off, "STEERING"
+  return StripStatus(steer_tone, steer_label, SegmentTone.active if cruise_enabled else SegmentTone.off)
 
 
 def format_speed_panel_values(is_cruise_set: bool, set_speed: float,
@@ -124,7 +134,7 @@ DEFAULT_MODERN_CONTRAST = ModernContrast(
 
 
 def build_modern_layout(rect: rl.Rectangle, developer_ui: int | None = 0) -> ModernLayout:
-  """Calculate the complete modern HUD layout from the current content bounds.
+  """Split the onroad view into the framed camera area and the dash strip below it.
 
   Developer UI values intentionally remain numeric here so this shared module
   does not need to import the UI-state-facing DeveloperUiState enum.
@@ -134,45 +144,36 @@ def build_modern_layout(rect: rl.Rectangle, developer_ui: int | None = 0) -> Mod
   bottom_reserve = BOTTOM_DEV_UI_RESERVE if has_bottom_dev_ui else 0
   right_reserve = RIGHT_DEV_UI_RESERVE if has_right_dev_ui else 0
 
-  right = rect.x + rect.width - RIGHT_MARGIN - right_reserve
-  bottom = rect.y + rect.height - BOTTOM_MARGIN - bottom_reserve
-  speed_panel = rl.Rectangle(right - SPEED_PANEL_WIDTH, bottom - SPEED_PANEL_HEIGHT,
-                             SPEED_PANEL_WIDTH, SPEED_PANEL_HEIGHT)
+  frame_height = rect.height - 2 * SCREEN_MARGIN - STRIP_GAP - STRIP_HEIGHT
+  camera_frame = rl.Rectangle(rect.x + SCREEN_MARGIN, rect.y + SCREEN_MARGIN,
+                              rect.width - 2 * SCREEN_MARGIN, frame_height)
+  camera = rl.Rectangle(camera_frame.x + MODERN_FRAME_THICKNESS, camera_frame.y + MODERN_FRAME_THICKNESS,
+                        camera_frame.width - 2 * MODERN_FRAME_THICKNESS,
+                        camera_frame.height - 2 * MODERN_FRAME_THICKNESS)
+  strip = rl.Rectangle(camera_frame.x, camera_frame.y + camera_frame.height + STRIP_GAP,
+                       camera_frame.width, STRIP_HEIGHT)
 
-  utility_bottom = bottom
-  exp_rect = rl.Rectangle(rect.x + RIGHT_MARGIN, utility_bottom - UTILITY_SIZE, UTILITY_SIZE, UTILITY_SIZE)
-  acceleration_bar = rl.Rectangle(rect.x + 8, exp_rect.y, 28, exp_rect.height)
-  road_left = exp_rect.x + exp_rect.width + ELEMENT_GAP
-  road_right = speed_panel.x - ELEMENT_GAP
-  road_name = rl.Rectangle(road_left, bottom - ROAD_NAME_HEIGHT,
-                           max(1.0, road_right - road_left), ROAD_NAME_HEIGHT)
-  circular_x = min(exp_rect.x + exp_rect.width + 26, speed_panel.x - 16 - 220)
-  circular_alert = rl.Rectangle(circular_x, utility_bottom - 220, 220, 220)
-  smart_cruise = rl.Rectangle(rect.x + RIGHT_MARGIN, circular_alert.y - 16 - 64 - 16 - 92, 360, 92)
+  inner_left = strip.x + STRIP_PADDING_X
+  inner_right = strip.x + strip.width - STRIP_PADDING_X
+  status_zone = rl.Rectangle(inner_left, strip.y, STATUS_ZONE_WIDTH, strip.height)
+  speed_zone = rl.Rectangle(inner_right - SPEED_ZONE_WIDTH, strip.y, SPEED_ZONE_WIDTH, strip.height)
+  centre_left = status_zone.x + status_zone.width + STRIP_COLUMN_GAP
+  centre_zone = rl.Rectangle(centre_left, strip.y, max(0.0, speed_zone.x - STRIP_COLUMN_GAP - centre_left), strip.height)
 
-  alert_left = exp_rect.x + exp_rect.width + ELEMENT_GAP
-  alert_right = speed_panel.x - ELEMENT_GAP
-  alert_available_width = max(1.0, alert_right - alert_left)
-  alert_width = min(900.0, alert_available_width)
-  alert_x = alert_left + (alert_available_width - alert_width) / 2
-  alert_bottom = bottom
-  alert_top = max(rect.y + rect.height * 0.3, alert_bottom - 420)
+  alert_left = camera.x + ALERT_MARGIN
+  alert_right = camera.x + camera.width - ALERT_MARGIN - right_reserve
+  alert_width = min(ALERT_MAX_WIDTH, max(1.0, alert_right - alert_left))
+  alert_x = alert_left + (alert_right - alert_left - alert_width) / 2
+  alert_bottom = camera.y + camera.height - ALERT_MARGIN - bottom_reserve
+  alert_top = max(camera.y + camera.height * MIRROR_OCCLUSION_FRACTION, alert_bottom - ALERT_MAX_HEIGHT)
   alert_safe = rl.Rectangle(alert_x, alert_top, alert_width, alert_bottom - alert_top)
 
-  signal_size = 150
-  signal_y = rect.y + rect.height * 0.45 - signal_size / 2
-  left_signal = rl.Rectangle(rect.x + 34, signal_y, signal_size, signal_size)
-  right_signal = rl.Rectangle(rect.x + rect.width - signal_size - 34 - right_reserve,
-                              signal_y, signal_size, signal_size)
-
   return ModernLayout(
-    speed_panel=speed_panel,
-    road_name=road_name,
-    experimental_control=exp_rect,
-    acceleration_bar=acceleration_bar,
-    smart_cruise=smart_cruise,
-    circular_alert=circular_alert,
+    camera_frame=camera_frame,
+    camera=camera,
+    strip=strip,
+    status_zone=status_zone,
+    centre_zone=centre_zone,
+    speed_zone=speed_zone,
     alert_safe=alert_safe,
-    left_signal=left_signal,
-    right_signal=right_signal,
   )

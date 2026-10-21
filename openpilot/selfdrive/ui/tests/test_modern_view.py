@@ -1,37 +1,23 @@
-from itertools import pairwise
-
 import numpy as np
 import pyray as rl
 
 from openpilot.selfdrive.ui.layouts import SIDEBAR_WIDTH
 from openpilot.selfdrive.ui.sunnypilot.onroad.modern_road import (
-  CLASSIC_LANE_LINE_HALF_WIDTH, MODERN_LANE_LINE_HALF_WIDTH, MODERN_ROAD_EDGE_MAX_ALPHA,
-  LaneChangeAnimator, LaneChangeIntent, LaneChangeVisualInput, LaneChangeVisualPhase,
+  CLASSIC_LANE_LINE_HALF_WIDTH, MODERN_LANE_LINE_HALF_WIDTH, MODERN_ROAD_EDGE_MAX_ALPHA, LeadTrend,
   advance_transition, control_blue_active, instrument_blue_active, lane_line_style,
-  lateral_blue_active, path_style, road_edge_alpha, slice_ribbon,
+  lateral_blue_active, lead_speed_label, path_style, road_edge_alpha, slice_ribbon,
 )
 from openpilot.selfdrive.ui.sunnypilot.onroad.modern_view import (
   BLOCKED_RED, BOTTOM_DEV_UI_RESERVE, BRIGHT_CONTROL_BLUE, CONTROL_BLUE, DEFAULT_MODERN_CONTRAST,
-  ELEMENT_GAP, LANE_LINE_WHITE, MODERN_FRAME_THICKNESS, NEUTRAL_GEOMETRY, RIGHT_DEV_UI_RESERVE, ROAD_NAME_HEIGHT,
-  SPEED_PANEL_HEIGHT, SPEED_PANEL_WIDTH, AdaptiveContrast, build_modern_layout,
-  format_speed_panel_values,
+  LANE_LINE_WHITE, MODERN_FRAME_THICKNESS, NEUTRAL_GEOMETRY, RIGHT_DEV_UI_RESERVE, STRIP_HEIGHT,
+  AdaptiveContrast, SegmentTone, build_modern_layout, format_speed_panel_values, strip_status,
 )
 from openpilot.selfdrive.ui.tests.profile_onroad import resolve_profile_view
 
 
 SCREEN_RECT = rl.Rectangle(0, 0, 2160, 1080)
-CONTENT_RECT = rl.Rectangle(
-  SCREEN_RECT.x + MODERN_FRAME_THICKNESS,
-  SCREEN_RECT.y + MODERN_FRAME_THICKNESS,
-  SCREEN_RECT.width - 2 * MODERN_FRAME_THICKNESS,
-  SCREEN_RECT.height - 2 * MODERN_FRAME_THICKNESS,
-)
-SIDEBAR_CONTENT_RECT = rl.Rectangle(
-  SIDEBAR_WIDTH + MODERN_FRAME_THICKNESS,
-  MODERN_FRAME_THICKNESS,
-  SCREEN_RECT.width - SIDEBAR_WIDTH - 2 * MODERN_FRAME_THICKNESS,
-  SCREEN_RECT.height - 2 * MODERN_FRAME_THICKNESS,
-)
+SIDEBAR_RECT = rl.Rectangle(SIDEBAR_WIDTH, 0, SCREEN_RECT.width - SIDEBAR_WIDTH, SCREEN_RECT.height)
+VIEW_RECTS = (SCREEN_RECT, SIDEBAR_RECT)
 
 
 def rect_right(rect: rl.Rectangle) -> float:
@@ -63,25 +49,81 @@ def test_channel_access_palette_uses_color_structs_not_predefined_tuples():
   assert all(all(hasattr(color, channel) for channel in ("r", "g", "b", "a")) for color in colors)
 
 
-def test_modern_frame_is_half_classic_thickness_and_content_uses_new_inset():
-  assert MODERN_FRAME_THICKNESS == 15
-  assert rect_tuple(CONTENT_RECT) == (15, 15, 2130, 1050)
-  assert rect_tuple(SIDEBAR_CONTENT_RECT) == (315, 15, 1830, 1050)
+def rect_contains(outer: rl.Rectangle, inner: rl.Rectangle) -> bool:
+  return (inner.x >= outer.x and inner.y >= outer.y and
+          rect_right(inner) <= rect_right(outer) and rect_bottom(inner) <= rect_bottom(outer))
 
 
-def test_speed_panel_is_fixed_bottom_right_and_replaces_old_regions():
-  layout = build_modern_layout(CONTENT_RECT)
+def test_camera_sits_in_a_status_frame_above_the_dash_strip():
+  layout = build_modern_layout(SCREEN_RECT)
 
-  assert rect_tuple(layout.speed_panel) == (
-    CONTENT_RECT.x + CONTENT_RECT.width - 48 - SPEED_PANEL_WIDTH,
-    CONTENT_RECT.y + CONTENT_RECT.height - 42 - SPEED_PANEL_HEIGHT,
-    SPEED_PANEL_WIDTH,
-    SPEED_PANEL_HEIGHT,
-  )
-  assert not hasattr(layout, "current_speed")
-  assert not hasattr(layout, "set_speed")
-  assert not hasattr(layout, "speed_limit")
-  assert not hasattr(layout, "speed_zone")
+  assert MODERN_FRAME_THICKNESS == 12
+  assert rect_tuple(layout.camera_frame) == (15, 15, 2130, 840)
+  assert rect_tuple(layout.camera) == (27, 27, 2106, 816)
+  assert rect_tuple(layout.strip) == (15, 875, 2130, STRIP_HEIGHT)
+  assert rect_bottom(layout.strip) == SCREEN_RECT.height - 15
+  assert not rectangles_overlap(layout.camera_frame, layout.strip)
+
+
+def test_strip_zones_are_ordered_inside_the_strip_without_overlap():
+  for view_rect in VIEW_RECTS:
+    for developer_ui in range(4):
+      layout = build_modern_layout(view_rect, developer_ui)
+      zones = (layout.status_zone, layout.centre_zone, layout.speed_zone)
+      assert all(rect_contains(layout.strip, zone) for zone in zones)
+      assert rect_right(layout.status_zone) < layout.centre_zone.x
+      assert rect_right(layout.centre_zone) < layout.speed_zone.x
+      assert layout.centre_zone.width > 0
+
+
+def test_sidebar_narrows_the_camera_and_strip_but_keeps_both_heights():
+  full = build_modern_layout(SCREEN_RECT)
+  sidebar = build_modern_layout(SIDEBAR_RECT)
+
+  assert sidebar.camera.x == full.camera.x + SIDEBAR_WIDTH
+  assert sidebar.camera.width == full.camera.width - SIDEBAR_WIDTH
+  assert sidebar.camera.height == full.camera.height
+  assert sidebar.strip.width == full.strip.width - SIDEBAR_WIDTH
+  assert rect_right(sidebar.speed_zone) == rect_right(full.speed_zone)
+
+
+def test_alert_zone_is_inside_the_camera_below_the_mirror_and_clear_of_the_strip():
+  for view_rect in VIEW_RECTS:
+    for developer_ui in range(4):
+      layout = build_modern_layout(view_rect, developer_ui)
+      safe = layout.alert_safe
+      assert rect_contains(layout.camera, safe)
+      assert safe.y >= layout.camera.y + layout.camera.height * 0.3
+      assert not rectangles_overlap(safe, layout.strip)
+      assert safe.width <= 1200
+
+
+def test_developer_ui_reserves_space_in_the_alert_zone_only():
+  base = build_modern_layout(SCREEN_RECT, 0)
+  bottom = build_modern_layout(SCREEN_RECT, 1)
+  right = build_modern_layout(SCREEN_RECT, 2)
+  both = build_modern_layout(SCREEN_RECT, 3)
+
+  assert rect_bottom(base.alert_safe) - rect_bottom(bottom.alert_safe) == BOTTOM_DEV_UI_RESERVE
+  assert rect_bottom(right.alert_safe) - rect_bottom(both.alert_safe) == BOTTOM_DEV_UI_RESERVE
+  assert rect_center_x(base.alert_safe) - rect_center_x(right.alert_safe) == RIGHT_DEV_UI_RESERVE / 2
+  for layout in (bottom, right, both):
+    assert rect_tuple(layout.camera) == rect_tuple(base.camera)
+    assert rect_tuple(layout.strip) == rect_tuple(base.strip)
+
+
+def status_tuple(status) -> tuple[SegmentTone, str, SegmentTone]:
+  return status.steer_tone, status.steer_label, status.cruise_tone
+
+
+def test_strip_status_separates_steering_from_cruise():
+  # Lat-only car with stock ACC: steering only, then steering with the car's cruise engaged.
+  assert status_tuple(strip_status(True, "lat_only", False)) == (SegmentTone.active, "STEERING", SegmentTone.off)
+  assert status_tuple(strip_status(True, "engaged", True)) == (SegmentTone.active, "STEERING", SegmentTone.active)
+  # MADS paused (e.g. brake pressed) while cruise stays on.
+  assert status_tuple(strip_status(False, "override", True)) == (SegmentTone.paused, "PAUSED", SegmentTone.active)
+  assert status_tuple(strip_status(False, "disengaged", False)) == (SegmentTone.off, "STEERING", SegmentTone.off)
+  assert status_tuple(strip_status(False, "long_only", True)) == (SegmentTone.off, "STEERING", SegmentTone.active)
 
 
 def test_speed_panel_values_cover_active_unset_unavailable_and_units():
@@ -90,94 +132,30 @@ def test_speed_panel_values_cover_active_unset_unavailable_and_units():
   assert format_speed_panel_values(False, -1.0, 0.0, False) == ("–", "0", "mph")
 
 
-def test_road_name_fills_the_gap_between_bottom_controls_with_consistent_padding():
-  for content_rect in (CONTENT_RECT, SIDEBAR_CONTENT_RECT):
-    for developer_ui in range(4):
-      layout = build_modern_layout(content_rect, developer_ui)
-      assert layout.road_name.x == rect_right(layout.experimental_control) + ELEMENT_GAP
-      assert rect_right(layout.road_name) == layout.speed_panel.x - ELEMENT_GAP
-      assert layout.road_name.height == ROAD_NAME_HEIGHT
-      assert not rectangles_overlap(layout.road_name, layout.experimental_control)
-      assert not rectangles_overlap(layout.road_name, layout.speed_panel)
+def test_lead_speed_label_shows_absolute_speed_and_trend():
+  closing = lead_speed_label(True, True, 0.9, 71 / 3.6, -2.0, True)
+  assert closing is not None
+  assert (closing.speed, closing.unit, closing.trend) == ("71", "km/h", LeadTrend.closing)
+
+  matching = lead_speed_label(True, True, 0.9, 22.2, -0.5, False)
+  assert matching is not None
+  assert (matching.speed, matching.unit, matching.trend) == ("50", "mph", LeadTrend.matching)
+
+  pulling_away = lead_speed_label(True, True, 0.9, 25.0, 1.5, True)
+  assert pulling_away is not None
+  assert pulling_away.trend == LeadTrend.pulling_away
+
+  stopped = lead_speed_label(True, True, 0.9, -0.3, -5.0, True)
+  assert stopped is not None
+  assert stopped.speed == "0"
 
 
-def test_developer_ui_reserves_bottom_and_right_space():
-  base = build_modern_layout(CONTENT_RECT, 0)
-  bottom = build_modern_layout(CONTENT_RECT, 1)
-  right = build_modern_layout(CONTENT_RECT, 2)
-  both = build_modern_layout(CONTENT_RECT, 3)
-
-  assert rect_bottom(base.speed_panel) - rect_bottom(bottom.speed_panel) == BOTTOM_DEV_UI_RESERVE
-  assert rect_bottom(right.speed_panel) - rect_bottom(both.speed_panel) == BOTTOM_DEV_UI_RESERVE
-  assert rect_right(base.speed_panel) - rect_right(right.speed_panel) == RIGHT_DEV_UI_RESERVE
-  assert rect_right(bottom.speed_panel) - rect_right(both.speed_panel) == RIGHT_DEV_UI_RESERVE
-  assert rect_bottom(base.road_name) - rect_bottom(bottom.road_name) == BOTTOM_DEV_UI_RESERVE
-  assert base.road_name.width - right.road_name.width == RIGHT_DEV_UI_RESERVE
-
-
-def test_sidebar_width_recomputes_regions_without_alert_speed_overlap():
-  sidebar_rect = SIDEBAR_CONTENT_RECT
-  for developer_ui in range(4):
-    layout = build_modern_layout(sidebar_rect, developer_ui)
-    assert rect_right(layout.alert_safe) <= layout.speed_panel.x
-    assert layout.alert_safe.x >= rect_right(layout.experimental_control)
-    assert rect_bottom(layout.alert_safe) == rect_bottom(layout.experimental_control)
-    assert rect_right(layout.speed_panel) <= rect_right(sidebar_rect)
-
-
-def test_required_regions_stay_below_mirror_occlusion_zone():
-  lhd_layout = build_modern_layout(CONTENT_RECT)
-  rhd_layout = build_modern_layout(CONTENT_RECT)
-  occlusion_bottom = CONTENT_RECT.y + CONTENT_RECT.height * 0.3
-
-  assert rect_tuple(lhd_layout.experimental_control) == rect_tuple(rhd_layout.experimental_control)
-  required = [lhd_layout.speed_panel, lhd_layout.road_name, lhd_layout.experimental_control,
-              lhd_layout.smart_cruise, lhd_layout.alert_safe,
-              lhd_layout.left_signal, lhd_layout.right_signal]
-  assert all(region.y >= occlusion_bottom for region in required)
-  assert rect_bottom(lhd_layout.alert_safe) == rect_bottom(lhd_layout.experimental_control)
-
-
-def test_wheel_uses_former_driver_monitoring_position_and_obsolete_regions_are_removed():
-  layout = build_modern_layout(CONTENT_RECT)
-
-  assert rect_tuple(layout.experimental_control) == (
-    CONTENT_RECT.x + 48,
-    CONTENT_RECT.y + CONTENT_RECT.height - 42 - 192,
-    192,
-    192,
-  )
-  assert not hasattr(layout, "driver_monitoring")
-  assert not hasattr(layout, "scrim")
-
-
-def test_alert_is_centered_in_bottom_gap_between_wheel_and_speed_cluster():
-  content_rects = (CONTENT_RECT, SIDEBAR_CONTENT_RECT)
-  for content_rect in content_rects:
-    for developer_ui in range(4):
-      layout = build_modern_layout(content_rect, developer_ui)
-      gap_left = rect_right(layout.experimental_control) + 28
-      gap_right = layout.speed_panel.x - 28
-      available_width = max(1.0, gap_right - gap_left)
-
-      assert layout.alert_safe.width == min(900.0, available_width)
-      assert rect_center_x(layout.alert_safe) == gap_left + available_width / 2
-      assert rect_bottom(layout.alert_safe) == rect_bottom(layout.experimental_control)
-      assert not rectangles_overlap(layout.alert_safe, layout.experimental_control)
-      assert not rectangles_overlap(layout.alert_safe, layout.speed_panel)
-      assert rectangles_overlap(layout.alert_safe, layout.road_name)
-
-
-def test_bottom_left_utility_regions_never_collide():
-  content_rects = (CONTENT_RECT, SIDEBAR_CONTENT_RECT)
-  for content_rect in content_rects:
-    for developer_ui in range(4):
-      layout = build_modern_layout(content_rect, developer_ui)
-      utility_regions = (layout.experimental_control, layout.smart_cruise, layout.circular_alert)
-      for index, first in enumerate(utility_regions):
-        assert all(not rectangles_overlap(first, second) for second in utility_regions[index + 1:])
-      assert rect_bottom(layout.smart_cruise) + 96 == layout.circular_alert.y
-      assert all(not rectangles_overlap(region, layout.speed_panel) for region in utility_regions)
+def test_lead_speed_label_hides_absent_and_unconfident_vision_leads():
+  assert lead_speed_label(False, True, 0.9, 20.0, 0.0, True) is None
+  assert lead_speed_label(True, False, 0.3, 20.0, 0.0, True) is None
+  assert lead_speed_label(True, False, 0.6, 20.0, 0.0, True) is not None
+  # A radar-matched lead is trusted regardless of the vision probability.
+  assert lead_speed_label(True, True, 0.1, 20.0, 0.0, True) is not None
 
 
 def test_adaptive_contrast_is_smoothed_and_has_midpoint_fallback():
@@ -265,146 +243,6 @@ def test_modern_active_blue_policy_covers_steering_and_longitudinal_overrides():
   assert lateral_blue_active("override")
   assert not lateral_blue_active("long_only")
   assert not lateral_blue_active("disengaged")
-
-
-def test_lane_change_request_has_no_visual_output():
-  animator = LaneChangeAnimator()
-  output = animator.update(LaneChangeVisualInput(LaneChangeIntent.requested, True, 0.0), 1 / 60)
-  assert output.phase == LaneChangeVisualPhase.idle
-  assert output.lock_sweep_position is None
-
-
-def test_lane_change_completion_uses_reverse_lock_sweep_once():
-  animator = LaneChangeAnimator()
-  active = LaneChangeVisualInput(LaneChangeIntent.active, True, 0.5)
-  completed = LaneChangeVisualInput(LaneChangeIntent.off, True, 0.01)
-  for _ in range(30):
-    animator.update(active, 1 / 60)
-
-  output = animator.update(completed, 1 / 60)
-  assert output.phase == LaneChangeVisualPhase.completing
-  assert output.lock_sweep_position is not None
-  assert 0.0 < output.lock_sweep_position < 1.0
-
-  lock_positions = [output.lock_sweep_position]
-  for _ in range(23):
-    output = animator.update(completed, 1 / 60)
-    if output.lock_sweep_position is not None:
-      lock_positions.append(output.lock_sweep_position)
-  assert all(first > second for first, second in pairwise(lock_positions))
-  assert output.phase == LaneChangeVisualPhase.idle
-  assert output.lock_sweep_position is None
-  assert animator.update(completed, 1 / 60).lock_sweep_position is None
-
-
-def test_lane_change_cancel_and_control_loss_have_no_visual_output():
-  animator = LaneChangeAnimator()
-  animator.update(LaneChangeVisualInput(LaneChangeIntent.requested, True, 0.0), 1 / 60)
-  output = animator.update(LaneChangeVisualInput(LaneChangeIntent.off, True, None), 1 / 60)
-  assert output.phase == LaneChangeVisualPhase.idle
-  assert output.lock_sweep_position is None
-
-  animator = LaneChangeAnimator()
-  active = LaneChangeVisualInput(LaneChangeIntent.active, True, 0.6)
-  interrupted = LaneChangeVisualInput(LaneChangeIntent.off, False, 0.6)
-  for _ in range(35):
-    animator.update(active, 1 / 60)
-  output = animator.update(interrupted, 1 / 60)
-  assert output.phase == LaneChangeVisualPhase.idle
-  assert output.lock_sweep_position is None
-
-
-def test_lane_change_control_loss_overrides_finishing_and_completion():
-  animator = LaneChangeAnimator()
-  active = LaneChangeVisualInput(LaneChangeIntent.active, True, 0.5)
-  for _ in range(30):
-    animator.update(active, 1 / 60)
-
-  finishing_without_control = LaneChangeVisualInput(LaneChangeIntent.finishing, False, 0.01)
-  output = animator.update(finishing_without_control, 1 / 60)
-  assert output.phase == LaneChangeVisualPhase.idle
-  assert output.lock_sweep_position is None
-
-  animator = LaneChangeAnimator()
-  for _ in range(30):
-    animator.update(active, 1 / 60)
-  completed = LaneChangeVisualInput(LaneChangeIntent.off, True, 0.01)
-  assert animator.update(completed, 1 / 60).phase == LaneChangeVisualPhase.completing
-
-  completion_interrupted = LaneChangeVisualInput(LaneChangeIntent.off, False, 0.01)
-  output = animator.update(completion_interrupted, 1 / 60)
-  assert output.phase == LaneChangeVisualPhase.idle
-  assert output.lock_sweep_position is None
-
-
-def test_lane_change_short_active_state_does_not_false_complete():
-  animator = LaneChangeAnimator()
-  active = LaneChangeVisualInput(LaneChangeIntent.active, True, 0.5)
-  for _ in range(26):
-    animator.update(active, 1 / 60)
-
-  output = animator.update(
-    LaneChangeVisualInput(LaneChangeIntent.off, True, 0.01),
-    1 / 60,
-  )
-  assert output.phase == LaneChangeVisualPhase.idle
-  assert output.lock_sweep_position is None
-
-  animator = LaneChangeAnimator()
-  for _ in range(27):
-    animator.update(active, 1 / 60)
-  output = animator.update(
-    LaneChangeVisualInput(LaneChangeIntent.off, True, 0.01),
-    1 / 60,
-  )
-  assert output.phase == LaneChangeVisualPhase.completing
-
-
-def test_lane_change_missing_desire_data_fails_conservatively_without_confirmation():
-  animator = LaneChangeAnimator()
-  active = LaneChangeVisualInput(LaneChangeIntent.active, True, 0.5)
-  for _ in range(35):
-    animator.update(active, 1 / 60)
-  output = animator.update(
-    LaneChangeVisualInput(LaneChangeIntent.off, True, None),
-    1 / 60,
-  )
-  assert output.phase == LaneChangeVisualPhase.idle
-  assert output.lock_sweep_position is None
-
-
-def test_lane_change_legacy_finishing_starts_completion_confirmation():
-  animator = LaneChangeAnimator()
-  active = LaneChangeVisualInput(LaneChangeIntent.active, True, 0.5)
-  finishing = LaneChangeVisualInput(LaneChangeIntent.finishing, True, 0.0)
-
-  output = animator.update(finishing, 1 / 60)
-  assert output.phase == LaneChangeVisualPhase.idle
-  assert output.lock_sweep_position is None
-
-  animator = LaneChangeAnimator()
-  animator.update(active, 1 / 60)
-  output = animator.update(finishing, 1 / 60)
-  assert output.phase == LaneChangeVisualPhase.completing
-  assert output.lock_sweep_position is not None
-
-
-def test_lane_change_completion_duration_is_frame_rate_independent_and_disable_resets():
-  for fps in (30, 60):
-    animator = LaneChangeAnimator()
-    animator.update(LaneChangeVisualInput(LaneChangeIntent.active, True, 0.5), 1 / fps)
-    output = animator.update(LaneChangeVisualInput(LaneChangeIntent.finishing, True, 0.0), 1 / fps)
-    assert output.phase == LaneChangeVisualPhase.completing
-    for _ in range(round(0.4 * fps) - 1):
-      output = animator.update(LaneChangeVisualInput(LaneChangeIntent.off, True, 0.0), 1 / fps)
-    assert output.phase == LaneChangeVisualPhase.idle
-
-  output = animator.update(
-    LaneChangeVisualInput(LaneChangeIntent.active, True, 0.5, enabled=False),
-    1 / 60,
-  )
-  assert output.phase == LaneChangeVisualPhase.idle
-  assert output.lock_sweep_position is None
 
 
 def test_engagement_transition_reverses_from_current_progress():

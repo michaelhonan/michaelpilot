@@ -52,9 +52,9 @@ def test_known_medium_alert_fits_sidebar_and_right_developer_ui_gap(monkeypatch)
     size=AlertSize.mid,
     status=AlertStatus.userPrompt,
   )
-  layout = build_modern_layout(rl.Rectangle(420, 30, 1680, 1020), developer_ui=2)
+  layout = build_modern_layout(rl.Rectangle(300, 0, 1860, 1080), developer_ui=3)
 
-  assert layout.alert_safe.width == 502
+  assert layout.alert_safe.width == 1200
   fit = renderer._fit_modern_alert(alert, int(layout.alert_safe.width), int(layout.alert_safe.height))
   assert fit is not None
   _, _, title_size, body_size, _, _, surface_height = fit

@@ -205,42 +205,42 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
       else:
         self._draw_ahead_info(sign_rect)
 
-  def render_modern(self, sign_rect: rl.Rectangle) -> None:
-    if ui_state.speed_limit_mode == SpeedLimitMode.off or not self.has_visible_limit:
+  def render_strip(self, rect: rl.Rectangle) -> None:
+    """Compact sign for the modern dash strip. rect bounds the sign itself (a circle for metric)."""
+    if not self.should_render_modern:
       return
 
+    limit_str, sub_text, txt_color, has_limit = self._sign_values()
     alpha = self._pre_active_fade.alpha
-    self._draw_sign_main(sign_rect, alpha)
-    if self.speed_limit_assist_state == AssistState.preActive:
-      self._draw_pre_active_arrow_modern(sign_rect)
+    white = rl.color_alpha(Colors.WHITE, alpha)
+    black = rl.color_alpha(Colors.BLACK, alpha)
+    text_color = rl.color_alpha(txt_color, alpha)
+
+    if ui_state.is_metric:
+      center = rl.Vector2(rect.x + rect.width / 2, rect.y + rect.height / 2)
+      radius = min(rect.width, rect.height) / 2
+      rl.draw_circle_v(center, radius, white)
+      rl.draw_ring(center, radius * 0.78, radius, 0, 360, 36, rl.color_alpha(Colors.RED, alpha))
+      font_size = int(radius * (0.85 if len(limit_str) < 3 else 0.66))
+      self._draw_text_centered(self.font_bold, limit_str, font_size, center, text_color)
+      badge_center = rl.Vector2(rect.x + rect.width - radius * 0.2, rect.y + radius * 0.2)
     else:
-      self._draw_ahead_info_modern(sign_rect)
+      rl.draw_rectangle_rounded(rect, 0.3, 10, white)
+      inner = rl.Rectangle(rect.x + 7, rect.y + 7, rect.width - 14, rect.height - 14)
+      rl.draw_rectangle_rounded_lines_ex(inner, 0.25, 10, 3, black)
+      cx = rect.x + rect.width / 2
+      self._draw_text_centered(self.font_demi, "SPEED", 18, rl.Vector2(cx, rect.y + rect.height * 0.2), black)
+      self._draw_text_centered(self.font_demi, "LIMIT", 18, rl.Vector2(cx, rect.y + rect.height * 0.36), black)
+      self._draw_text_centered(self.font_bold, limit_str, 46, rl.Vector2(cx, rect.y + rect.height * 0.68), text_color)
+      badge_center = rl.Vector2(rect.x + rect.width - 6, rect.y + 6)
 
-  def _draw_pre_active_arrow_modern(self, sign_rect: rl.Rectangle) -> None:
-    _, texture, icon_alpha, _, _ = SpeedLimitAlertRenderer.speed_limit_pre_active_icon_helper(self)
-    if icon_alpha <= 0 or texture == self.arrow_blank:
-      return
-    scale = 0.32
-    x = sign_rect.x + sign_rect.width - texture.width * scale
-    y = sign_rect.y - texture.height * scale - 8
-    rl.draw_texture_ex(texture, rl.Vector2(x, y), 0.0, scale, rl.Color(255, 255, 255, int(icon_alpha)))
+    if sub_text and has_limit:
+      badge_radius = min(rect.width, rect.height) * 0.2
+      rl.draw_circle_v(badge_center, badge_radius, black)
+      rl.draw_ring(badge_center, badge_radius - 3, badge_radius, 0, 360, 36, rl.color_alpha(Colors.DARK_GREY, alpha))
+      self._draw_text_centered(self.font_bold, sub_text, int(badge_radius * 0.9), badge_center, white)
 
-  def _draw_ahead_info_modern(self, sign_rect: rl.Rectangle) -> None:
-    source_is_map = self.speed_limit_source == SpeedLimitSource.map
-    valid = self.speed_limit_ahead_valid and self.speed_limit_ahead > 0 and self.speed_limit_ahead != self.speed_limit
-    if not (valid and source_is_map):
-      return
-
-    ahead_text = f"AHEAD  {round(self.speed_limit_ahead)}"
-    font_size = 32
-    text_size = measure_text_cached(self.font_demi, ahead_text, font_size)
-    width = max(sign_rect.width, text_size.x + 26)
-    rect = rl.Rectangle(sign_rect.x + (sign_rect.width - width) / 2, sign_rect.y - 58, width, 48)
-    rl.draw_rectangle_rounded(rect, 0.25, 8, Colors.SUB_BG)
-    self._draw_text_centered(self.font_demi, ahead_text, font_size,
-                             rl.Vector2(rect.x + rect.width / 2, rect.y + rect.height / 2), Colors.WHITE)
-
-  def _draw_sign_main(self, rect, alpha=1.0):
+  def _sign_values(self) -> tuple[str, str, rl.Color, bool]:
     speed_limit_warning_enabled = ui_state.speed_limit_mode is not None and ui_state.speed_limit_mode >= SpeedLimitMode.warning
     has_limit = self.speed_limit_valid or self.speed_limit_last_valid
     is_overspeed = has_limit and round(self.speed_limit_final_last) < round(self.speed)
@@ -256,6 +256,10 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
       txt_color = Colors.RED
     elif not self.speed_limit_valid:
       txt_color = Colors.GREY
+    return limit_str, sub_text, txt_color, has_limit
+
+  def _draw_sign_main(self, rect, alpha=1.0):
+    limit_str, sub_text, txt_color, has_limit = self._sign_values()
 
     if ui_state.is_metric:
       self._render_vienna(rect, limit_str, sub_text, txt_color, has_limit, alpha)

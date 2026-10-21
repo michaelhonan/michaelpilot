@@ -279,16 +279,18 @@ def send_big_onroad_scene(pm: MessagePublisher, *, control_mode: str = "full",
   model.modelV2.position.z = zero_values
   model.modelV2.acceleration.x = [0.15] * len(x_values)
   lane_lines = model.modelV2.init('laneLines', 4)
+  # Lane lines and road edges are on the road surface, which the model reports at camera height.
+  road_z = [1.22] * len(x_values)
   for lane_line, y_offset in zip(lane_lines, (5.4, 1.8, -1.8, -5.4), strict=True):
     lane_line.x = x_values
     lane_line.y = [y_offset] * len(x_values)
-    lane_line.z = zero_values
+    lane_line.z = road_z
   model.modelV2.laneLineProbs = [0.9, 0.95, 0.95, 0.9]
   road_edges = model.modelV2.init('roadEdges', 2)
   for road_edge, y_offset in zip(road_edges, (7.2, -7.2), strict=True):
     road_edge.x = x_values
     road_edge.y = [y_offset] * len(x_values)
-    road_edge.z = zero_values
+    road_edge.z = road_z
   model.modelV2.roadEdgeStds = [0.15, 0.15]
   model.modelV2.meta.laneChangeState = lane_change_state
   model.modelV2.meta.laneChangeDirection = lane_change_direction
@@ -299,10 +301,15 @@ def send_big_onroad_scene(pm: MessagePublisher, *, control_mode: str = "full",
   model.modelV2.meta.desireState = desire_state
 
   radar = messaging.new_message('radarState')
+  radar.valid = True
   radar.radarState.leadOne.present = True
   radar.radarState.leadOne.dRel = 45.0
   radar.radarState.leadOne.yRel = 0.0
   radar.radarState.leadOne.vRel = -1.0
+  radar.radarState.leadOne.vLead = car_state.carState.vEgo - 1.0
+  radar.radarState.leadOne.vLeadK = car_state.carState.vEgo - 1.0
+  radar.radarState.leadOne.modelProb = 0.9
+  radar.radarState.leadOne.radar = True
 
   calibration = messaging.new_message('extrinsicsCalibration')
   calibration.valid = True
@@ -695,7 +702,7 @@ def build_tizi_script(pm: PubMaster, main_layout, script: Script) -> None:
   script.set_send(lambda: send_big_onroad_scene(pm, control_mode="lateral"))
   script.set_send(lambda: send_big_onroad_scene(pm, control_mode="longitudinal"))
   script.set_send(lambda: send_big_onroad_scene(pm, control_mode="override"))
-  # Successful left lane change: active manoeuvre followed by a controlled-path completion sweep.
+  # Left lane change with the indicator on, then back to lane keeping.
   script.set_send(lambda: send_big_onroad_scene(
     pm, control_mode="lateral", openpilot_longitudinal_control=False,
     lane_change_state=log.LaneChangeState.laneChangeStarting,

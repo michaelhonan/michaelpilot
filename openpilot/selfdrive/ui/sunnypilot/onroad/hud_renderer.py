@@ -16,18 +16,50 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.smart_cruise_control import SmartC
 from openpilot.selfdrive.ui.sunnypilot.onroad.turn_signal import TurnSignalController
 from openpilot.selfdrive.ui.sunnypilot.onroad.circular_alerts import CircularAlertsRenderer
 from openpilot.selfdrive.ui.sunnypilot.onroad.speed_renderer import SpeedRenderer
-from openpilot.selfdrive.ui.sunnypilot.onroad.modern_road import instrument_blue_active
 from openpilot.selfdrive.ui.sunnypilot.onroad.modern_view import (
-  DEFAULT_MODERN_CONTRAST, MODERN_SURFACES, MODERN_TYPOGRAPHY, ModernContrast, build_modern_layout,
-  format_speed_panel_values,
+  DEFAULT_MODERN_CONTRAST, ModernContrast, ModernLayout, SegmentTone, build_modern_layout,
+  format_speed_panel_values, strip_status,
 )
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer, UI_CONFIG, FONT_SIZES, COLORS, CRUISE_DISABLED_CHAR
-from openpilot.system.ui.lib.application import gui_app, FontWeight
+from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 
 SLA_ACTIVE_COLOR = rl.Color(0x91, 0x9b, 0x95, 0xff)
+
+# Dash strip. Font sizes are nominal: draw_text_ex scales them up by FONT_SCALE on the big UI.
+STRIP_BG = rl.Color(0x0B, 0x0D, 0x10, 0xFF)
+STRIP_RADIUS = 48
+STRIP_PILL_BG = rl.Color(0x15, 0x19, 0x1E, 0xFF)
+STRIP_MUTED = rl.Color(0x5F, 0x68, 0x73, 0xFF)
+STRIP_SECONDARY = rl.Color(0x8A, 0x93, 0xA0, 0xFF)
+STRIP_DIVIDER = rl.Color(255, 255, 255, 31)
+STRIP_ROAD_NAME = rl.Color(0xE6, 0xE9, 0xEE, 0xFF)
+STRIP_PAUSED = rl.Color(0x8A, 0x91, 0x8D, 0xFF)
+SIGNAL_IDLE = rl.Color(255, 255, 255, 36)
+SIGNAL_LIT = rl.Color(0x3D, 0xDC, 0x84, 0xFF)
+SIGNAL_BLIND_SPOT = rl.Color(0xF0, 0x56, 0x4A, 0xFF)
+SIGNAL_MIN_LIT = 0.45
+
+STATUS_PILL_HEIGHT = 116
+STATUS_PILL_PADDING = 8
+STATUS_SEGMENT_PADDING_X = 34
+STATUS_DOT_SIZE = 16
+STATUS_DOT_GAP = 14
+STATUS_FONT_SIZE = 26
+STATUS_LETTER_SPACING = 2
+ROAD_NAME_FONT_SIZE = 37
+SIGNAL_SIZE = 64
+SIGNAL_GAP = 36
+SPEED_FONT_SIZE = 121
+SPEED_UNIT_FONT_SIZE = 24
+SET_LABEL_FONT_SIZE = 21
+SET_VALUE_FONT_SIZE = 58
+SET_COLUMN_WIDTH = 120
+SPEED_GROUP_GAP = 28
+SIGN_SIZE = 136
+MUTCD_SIGN_WIDTH = 112
 
 
 class HudRendererSP(HudRenderer):
@@ -43,7 +75,6 @@ class HudRendererSP(HudRenderer):
     self.speed_renderer = SpeedRenderer()
     self._torque_bar = TorqueBar(scale=3.0, always=True)
     self._modern_contrast = DEFAULT_MODERN_CONTRAST
-    self._font_audiowide = gui_app.font(FontWeight.AUDIOWIDE)
 
     self.pcm_cruise_speed: bool = True
     self.show_icbm_status: bool = False
@@ -138,68 +169,161 @@ class HudRendererSP(HudRenderer):
   def _draw_current_speed(self, rect: rl.Rectangle) -> None:
     self.speed_renderer.render(rect)
 
-  def _draw_speed_panel_modern(self, rect: rl.Rectangle) -> None:
-    long_override = ui_state.sm['carControl'].cruiseControl.override
-    control_active = instrument_blue_active(ui_state.status.value, long_override)
-    border = self._modern_contrast.control_blue if control_active else COLORS.BORDER_TRANSLUCENT
-
-    rl.draw_rectangle_rounded(rect, MODERN_SURFACES.panel_roundness, 10,
-                              rl.Color(0, 0, 0, MODERN_SURFACES.panel_alpha))
-    rl.draw_rectangle_rounded_lines_ex(rect, MODERN_SURFACES.panel_roundness, 10,
-                                       MODERN_SURFACES.panel_border_width, border)
-
-    label_color = self._modern_contrast.control_blue if control_active else COLORS.GREY
-    set_label_color = label_color if self.is_cruise_set else rl.Color(label_color.r, label_color.g, label_color.b, 90)
-    set_value_color = COLORS.WHITE if self.is_cruise_set else rl.Color(255, 255, 255, 90)
-    value_shadow = rl.Color(0, 0, 0, self._modern_contrast.text_shadow_alpha)
-
-    set_center_x = rect.x + rect.width * 0.25
-    speed_center_x = rect.x + rect.width * 0.75
-    label_y = rect.y + 24
-    value_y = rect.y + 70
-
-    self._draw_modern_text_centered(tr("SET"), set_center_x, label_y,
-                                    self._font_audiowide, MODERN_TYPOGRAPHY.panel_label, set_label_color)
-    self._draw_modern_text_centered(tr("SPEED"), speed_center_x, label_y,
-                                    self._font_audiowide, MODERN_TYPOGRAPHY.panel_label, label_color)
-
-    set_speed_text, speed_text, unit_text = format_speed_panel_values(
-      self.is_cruise_set, self.set_speed, self.speed_renderer.speed, ui_state.is_metric,
-    )
-    self._draw_modern_text_centered(set_speed_text, set_center_x + 3, value_y + 3,
-                                    self._font_audiowide, MODERN_TYPOGRAPHY.panel_value, value_shadow)
-    self._draw_modern_text_centered(set_speed_text, set_center_x, value_y,
-                                    self._font_audiowide, MODERN_TYPOGRAPHY.panel_value, set_value_color)
-    self._draw_modern_text_centered(speed_text, speed_center_x + 3, value_y + 3,
-                                    self._font_audiowide, MODERN_TYPOGRAPHY.panel_value, value_shadow)
-    self._draw_modern_text_centered(speed_text, speed_center_x, value_y,
-                                    self._font_audiowide, MODERN_TYPOGRAPHY.panel_value, COLORS.WHITE)
-
-    unit_text = tr(unit_text)
-    self._draw_modern_text_centered(unit_text, speed_center_x, rect.y + rect.height - 45,
-                                    self._font_medium, MODERN_TYPOGRAPHY.panel_unit,
-                                    COLORS.WHITE_TRANSLUCENT)
-
-  @staticmethod
-  def _draw_modern_text_centered(text: str, center_x: float, y: float, font: rl.Font,
-                                 font_size: int, color: rl.Color) -> None:
-    text_size = measure_text_cached(font, text, font_size)
-    rl.draw_text_ex(font, text, rl.Vector2(center_x - text_size.x / 2, y), font_size, 0, color)
-
   def _render_modern(self, rect: rl.Rectangle) -> None:
     layout = build_modern_layout(rect, ui_state.developer_ui)
-
-    self._draw_speed_panel_modern(layout.speed_panel)
+    camera = layout.camera
 
     if ui_state.torque_bar:
-      self._torque_bar.render(rl.Rectangle(rect.x, rect.y, rect.width, rect.height - get_bottom_dev_ui_offset()))
+      self._torque_bar.render(rl.Rectangle(camera.x, camera.y, camera.width, camera.height - get_bottom_dev_ui_offset()))
 
-    self.developer_ui.render(rect)
-    self.road_name_renderer.render_modern(layout.road_name)
-    self.smart_cruise_control_renderer.render_modern(layout.smart_cruise, self._modern_contrast.control_blue)
-    self.turn_signal_controller.render_modern(layout.left_signal, layout.right_signal)
-    self.circular_alerts_renderer.render_modern(layout.circular_alert)
-    self.rocket_fuel.render_modern(layout.acceleration_bar, ui_state.sm)
+    self.developer_ui.render(camera)
+    self._draw_strip(layout)
+
+  def _draw_strip(self, layout: ModernLayout) -> None:
+    strip = layout.strip
+    rl.draw_rectangle_rounded(strip, STRIP_RADIUS * 2 / min(strip.width, strip.height), 10, STRIP_BG)
+    self._draw_strip_status(layout.status_zone)
+    self._draw_strip_road(layout.centre_zone)
+    self._draw_strip_speed(layout.speed_zone)
+
+  def _draw_strip_status(self, zone: rl.Rectangle) -> None:
+    sm = ui_state.sm
+    status = strip_status(sm['carControl'].latActive, ui_state.status.value, sm['carState'].cruiseState.enabled)
+    segments = ((tr(status.steer_label), status.steer_tone), (tr("CRUISE"), status.cruise_tone))
+
+    font = self._font_bold
+    widths = [2 * STATUS_SEGMENT_PADDING_X + STATUS_DOT_SIZE + STATUS_DOT_GAP +
+              measure_text_cached(font, text, STATUS_FONT_SIZE, STATUS_LETTER_SPACING).x for text, _ in segments]
+    pill = rl.Rectangle(zone.x, zone.y + (zone.height - STATUS_PILL_HEIGHT) / 2,
+                        sum(widths) + STATUS_PILL_PADDING * (len(segments) + 1), STATUS_PILL_HEIGHT)
+    rl.draw_rectangle_rounded(pill, 1.0, 16, STRIP_PILL_BG)
+
+    segment_height = STATUS_PILL_HEIGHT - 2 * STATUS_PILL_PADDING
+    x = pill.x + STATUS_PILL_PADDING
+    center_y = pill.y + pill.height / 2
+    for (text, tone), width in zip(segments, widths, strict=True):
+      if tone == SegmentTone.active:
+        background, foreground = self._modern_contrast.control_blue, COLORS.WHITE
+      elif tone == SegmentTone.paused:
+        background, foreground = STRIP_PAUSED, COLORS.WHITE
+      else:
+        background, foreground = None, STRIP_MUTED
+      if background is not None:
+        rl.draw_rectangle_rounded(rl.Rectangle(x, pill.y + STATUS_PILL_PADDING, width, segment_height), 1.0, 16, background)
+
+      dot_x = x + STATUS_SEGMENT_PADDING_X
+      rl.draw_circle_v(rl.Vector2(dot_x + STATUS_DOT_SIZE / 2, center_y), STATUS_DOT_SIZE / 2, foreground)
+      text_size = measure_text_cached(font, text, STATUS_FONT_SIZE, STATUS_LETTER_SPACING)
+      rl.draw_text_ex(font, text, rl.Vector2(dot_x + STATUS_DOT_SIZE + STATUS_DOT_GAP, center_y - text_size.y / 2),
+                      STATUS_FONT_SIZE, STATUS_LETTER_SPACING, foreground)
+      x += width + STATUS_PILL_PADDING
+
+  def _draw_strip_road(self, zone: rl.Rectangle) -> None:
+    center = rl.Vector2(zone.x + zone.width / 2, zone.y + zone.height / 2)
+    show_signals = ui_state.turn_signals or ui_state.blindspot
+    signal_space = SIGNAL_SIZE + SIGNAL_GAP if show_signals else 0
+
+    road_name = self.road_name_renderer.road_name if ui_state.road_name_toggle else ""
+    text_width = 0.0
+    if road_name:
+      max_width = zone.width - 2 * signal_space
+      text = self._truncate(self._font_semi_bold, road_name, ROAD_NAME_FONT_SIZE, max_width)
+      if text:
+        size = measure_text_cached(self._font_semi_bold, text, ROAD_NAME_FONT_SIZE)
+        text_width = size.x
+        rl.draw_text_ex(self._font_semi_bold, text, rl.Vector2(center.x - size.x / 2, center.y - size.y / 2),
+                        ROAD_NAME_FONT_SIZE, 0, STRIP_ROAD_NAME)
+
+    if not show_signals:
+      return
+    offset = (text_width / 2 + SIGNAL_GAP) if text_width else SIGNAL_GAP / 2
+    (left_type, left_alpha), (right_type, right_alpha) = self.turn_signal_controller.strip_states()
+    self._draw_signal_arrow(center.x - offset - SIGNAL_SIZE, center.y, False, self._signal_color(left_type, left_alpha))
+    self._draw_signal_arrow(center.x + offset, center.y, True, self._signal_color(right_type, right_alpha))
+
+  @staticmethod
+  def _signal_color(signal_type: str | None, alpha: int) -> rl.Color:
+    if signal_type == 'blind_spot':
+      return SIGNAL_BLIND_SPOT
+    if signal_type == 'signal':
+      # Blink between full and part green rather than back to idle, so an indicator that's on always reads as on.
+      lit = max(SIGNAL_MIN_LIT, min(alpha / 255, 1.0))
+      return rl.Color(
+        round(SIGNAL_IDLE.r + (SIGNAL_LIT.r - SIGNAL_IDLE.r) * lit),
+        round(SIGNAL_IDLE.g + (SIGNAL_LIT.g - SIGNAL_IDLE.g) * lit),
+        round(SIGNAL_IDLE.b + (SIGNAL_LIT.b - SIGNAL_IDLE.b) * lit),
+        round(SIGNAL_IDLE.a + (SIGNAL_LIT.a - SIGNAL_IDLE.a) * lit),
+      )
+    return SIGNAL_IDLE
+
+  @staticmethod
+  def _draw_signal_arrow(x: float, center_y: float, pointing_right: bool, color: rl.Color) -> None:
+    # Arrow drawn on a 24-unit grid: a head from x=2..10 and a shaft from x=10..20, mirrored for the right side.
+    scale = SIGNAL_SIZE / 24
+    top = center_y - SIGNAL_SIZE / 2
+
+    def point(u: float, v: float) -> rl.Vector2:
+      return rl.Vector2(x + (24 - u if pointing_right else u) * scale, top + v * scale)
+
+    tip, head_top, head_bottom = point(2, 12), point(10, 4), point(10, 20)
+    # raylib only fills triangles wound counter-clockwise on screen.
+    if pointing_right:
+      rl.draw_triangle(tip, head_top, head_bottom, color)
+    else:
+      rl.draw_triangle(tip, head_bottom, head_top, color)
+    shaft_left = x + (4 if pointing_right else 10) * scale
+    rl.draw_rectangle_rec(rl.Rectangle(shaft_left, top + 9 * scale, 10 * scale, 6 * scale), color)
+
+  def _draw_strip_speed(self, zone: rl.Rectangle) -> None:
+    center_y = zone.y + zone.height / 2
+    set_text, speed_text, unit_text = format_speed_panel_values(
+      self.is_cruise_set, self.set_speed, self.speed_renderer.speed, ui_state.is_metric,
+    )
+    unit_text = tr(unit_text)
+
+    # Laid out right to left so the current speed always hugs the strip's right edge.
+    right = zone.x + zone.width
+    if not ui_state.hide_v_ego_ui:
+      speed_size = measure_text_cached(self._font_bold, speed_text, SPEED_FONT_SIZE)
+      unit_size = measure_text_cached(self._font_medium, unit_text, SPEED_UNIT_FONT_SIZE)
+      unit_x = right - unit_size.x
+      speed_x = unit_x - 12 - speed_size.x
+      speed_y = center_y - speed_size.y / 2
+      # Sit the unit on the speed's baseline (roughly 80% of the line height for Inter).
+      unit_y = speed_y + speed_size.y * 0.8 - unit_size.y * 0.8
+      rl.draw_text_ex(self._font_bold, speed_text, rl.Vector2(speed_x, speed_y), SPEED_FONT_SIZE, 0, COLORS.WHITE)
+      rl.draw_text_ex(self._font_medium, unit_text, rl.Vector2(unit_x, unit_y), SPEED_UNIT_FONT_SIZE, 0, STRIP_SECONDARY)
+
+      divider_x = speed_x - SPEED_GROUP_GAP
+      rl.draw_rectangle_rec(rl.Rectangle(divider_x - 2, center_y - 60, 2, 120), STRIP_DIVIDER)
+      right = divider_x - 2 - SPEED_GROUP_GAP
+
+    if self.is_cruise_available:
+      set_x = right - SET_COLUMN_WIDTH
+      label_color = self._modern_contrast.lateral_only_blue if self.is_cruise_set else STRIP_MUTED
+      value_color = COLORS.WHITE if self.is_cruise_set else STRIP_MUTED
+      label_size = measure_text_cached(self._font_bold, tr("SET"), SET_LABEL_FONT_SIZE, 3)
+      value_size = measure_text_cached(self._font_bold, set_text, SET_VALUE_FONT_SIZE)
+      column_top = center_y - (label_size.y + value_size.y) / 2
+      rl.draw_text_ex(self._font_bold, tr("SET"), rl.Vector2(set_x + (SET_COLUMN_WIDTH - label_size.x) / 2, column_top),
+                      SET_LABEL_FONT_SIZE, 3, label_color)
+      rl.draw_text_ex(self._font_bold, set_text,
+                      rl.Vector2(set_x + (SET_COLUMN_WIDTH - value_size.x) / 2, column_top + label_size.y),
+                      SET_VALUE_FONT_SIZE, 0, value_color)
+      right = set_x - SPEED_GROUP_GAP
+
+    sign_width = SIGN_SIZE if ui_state.is_metric else MUTCD_SIGN_WIDTH
+    self.speed_limit_renderer.render_strip(rl.Rectangle(right - sign_width, center_y - SIGN_SIZE / 2, sign_width, SIGN_SIZE))
+
+  @staticmethod
+  def _truncate(font: rl.Font, text: str, font_size: int, max_width: float) -> str:
+    if max_width <= 0:
+      return ""
+    if measure_text_cached(font, text, font_size).x <= max_width:
+      return text
+    while text and measure_text_cached(font, text + "...", font_size).x > max_width:
+      text = text[:-1]
+    return text + "..." if text else ""
 
   def _render(self, rect: rl.Rectangle) -> None:
     if ui_state.modern_driving_view:

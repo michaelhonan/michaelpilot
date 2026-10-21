@@ -18,7 +18,7 @@ if gui_app.sunnypilot_ui():
   from openpilot.selfdrive.ui.sunnypilot.onroad.augmented_road_view import BORDER_COLORS_SP, AugmentedRoadViewSP
   from openpilot.selfdrive.ui.sunnypilot.onroad.driver_state import DriverStateRendererSP as DriverStateRenderer
   from openpilot.selfdrive.ui.sunnypilot.onroad.hud_renderer import HudRendererSP as HudRenderer
-  from openpilot.selfdrive.ui.sunnypilot.onroad.modern_view import MODERN_FRAME_THICKNESS, AdaptiveContrast
+  from openpilot.selfdrive.ui.sunnypilot.onroad.modern_view import MODERN_FRAME_THICKNESS, AdaptiveContrast, build_modern_layout
   from openpilot.selfdrive.ui.sunnypilot.ui_state import OnroadTimerStatus
 
 OpState = log.SelfdriveState.OpenpilotState
@@ -70,19 +70,16 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
 
     # Update calibration before rendering
     self._update_calibration()
-    modern = gui_app.sunnypilot_ui() and ui_state.modern_driving_view
-    if modern:
-      self._modern_contrast = self._modern_contrast_filter.update(ui_state.light_sensor)
-      self.model_renderer.set_modern_contrast(self._modern_contrast)
-      self._hud_renderer.set_modern_contrast(self._modern_contrast)
+    if gui_app.sunnypilot_ui() and ui_state.modern_driving_view:
+      self._render_modern(rect)
+      return
 
     # Create inner content area with border padding
-    border_size = MODERN_FRAME_THICKNESS if modern else UI_BORDER_SIZE
     self._content_rect = rl.Rectangle(
-      rect.x + border_size,
-      rect.y + border_size,
-      rect.width - 2 * border_size,
-      rect.height - 2 * border_size,
+      rect.x + UI_BORDER_SIZE,
+      rect.y + UI_BORDER_SIZE,
+      rect.width - 2 * UI_BORDER_SIZE,
+      rect.height - 2 * UI_BORDER_SIZE,
     )
 
     # Enable scissor mode to clip all rendering within content rectangle boundaries
@@ -102,8 +99,7 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     AugmentedRoadViewSP.update_fade_out_bottom_overlay(self, self._content_rect)
     self._hud_renderer.render(self._content_rect)
     self.alert_renderer.render(self._content_rect)
-    if not (gui_app.sunnypilot_ui() and ui_state.modern_driving_view):
-      self.driver_state_renderer.render(self._content_rect)
+    self.driver_state_renderer.render(self._content_rect)
 
     # Custom UI extension point - add custom overlays here
     # Use self._content_rect for positioning within camera bounds
@@ -114,6 +110,45 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     # Draw colored border based on driving state
     self._draw_border(rect)
 
+  def _render_modern(self, rect: rl.Rectangle) -> None:
+    """Camera in a status frame above the dash strip. Only the camera, path and lead label are clipped to the camera."""
+    self._modern_contrast = self._modern_contrast_filter.update(ui_state.light_sensor)
+    self.model_renderer.set_modern_contrast(self._modern_contrast)
+    self._hud_renderer.set_modern_contrast(self._modern_contrast)
+
+    layout = build_modern_layout(rect, ui_state.developer_ui)
+    self._content_rect = layout.camera
+    rl.draw_rectangle_rec(rect, rl.BLACK)
+
+    camera = layout.camera
+    rl.begin_scissor_mode(int(camera.x), int(camera.y), int(camera.width), int(camera.height))
+    super()._render(camera)
+    self.model_renderer.render(camera)
+    AugmentedRoadViewSP.update_fade_out_bottom_overlay(self, camera)
+    rl.end_scissor_mode()
+
+    self._draw_modern_frame(layout.camera)
+    # The HUD and alerts lay themselves out from the full view: the strip sits outside the camera,
+    # and full-size alerts cover the strip too.
+    self._hud_renderer.render(rect)
+    self.alert_renderer.render(rect)
+
+  def _draw_modern_frame(self, camera: rl.Rectangle) -> None:
+    border_color = BORDER_COLORS.get(ui_state.status, BORDER_COLORS[UIStatus.DISENGAGED])
+    if ui_state.status in (UIStatus.ENGAGED, UIStatus.OVERRIDE):
+      border_color = self._modern_contrast.control_blue
+    elif ui_state.status == UIStatus.LAT_ONLY:
+      border_color = self._modern_contrast.lateral_only_blue
+    # Rounded lines grow outward from the rectangle, so the ring sits just outside the camera image. Its inner
+    # edge is curved, so first black out the square camera corners that would otherwise poke past the curve.
+    roundness = 0.12
+    radius = min(camera.width, camera.height) * roundness / 2
+    left, top = camera.x + radius, camera.y + radius
+    right, bottom = camera.x + camera.width - radius, camera.y + camera.height - radius
+    for center, start_angle in (((left, top), 180), ((right, top), 270), ((right, bottom), 0), ((left, bottom), 90)):
+      rl.draw_ring(rl.Vector2(*center), radius, radius * 1.5, start_angle, start_angle + 90, 16, rl.BLACK)
+    rl.draw_rectangle_rounded_lines_ex(camera, roundness, 10, MODERN_FRAME_THICKNESS, border_color)
+
   def _handle_mouse_press(self, _):
     if self._click_callback is not None:
       self._click_callback()
@@ -123,19 +158,12 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     pass
 
   def _draw_border(self, rect: rl.Rectangle):
-    modern = gui_app.sunnypilot_ui() and ui_state.modern_driving_view
-    border_size = MODERN_FRAME_THICKNESS if modern else UI_BORDER_SIZE
-    rl.draw_rectangle_lines_ex(rect, border_size, rl.BLACK)
+    rl.draw_rectangle_lines_ex(rect, UI_BORDER_SIZE, rl.BLACK)
     border_roundness = 0.12
     border_color = BORDER_COLORS.get(ui_state.status, BORDER_COLORS[UIStatus.DISENGAGED])
-    if modern:
-      if ui_state.status in (UIStatus.ENGAGED, UIStatus.OVERRIDE):
-        border_color = self._modern_contrast.control_blue
-      elif ui_state.status == UIStatus.LAT_ONLY:
-        border_color = self._modern_contrast.lateral_only_blue
-    border_rect = rl.Rectangle(rect.x + border_size, rect.y + border_size,
-                               rect.width - 2 * border_size, rect.height - 2 * border_size)
-    rl.draw_rectangle_rounded_lines_ex(border_rect, border_roundness, 10, border_size, border_color)
+    border_rect = rl.Rectangle(rect.x + UI_BORDER_SIZE, rect.y + UI_BORDER_SIZE,
+                               rect.width - 2 * UI_BORDER_SIZE, rect.height - 2 * UI_BORDER_SIZE)
+    rl.draw_rectangle_rounded_lines_ex(border_rect, border_roundness, 10, UI_BORDER_SIZE, border_color)
 
   def _switch_stream_if_needed(self, sm):
     if sm['carParams'].openpilotLongitudinalControl and WIDE_CAM in self.available_streams:
